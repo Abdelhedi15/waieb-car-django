@@ -1,12 +1,18 @@
+# ════════════════════════════════════════════════════
+# backend/settings.py — REPLACE ENTIRE FILE with this
+# for Railway deployment
+# ════════════════════════════════════════════════════
 from pathlib import Path
 from datetime import timedelta
 import os
+import dj_database_url
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-SECRET_KEY = 'django-insecure-33q@)3b-fl2_iefmum9s7l076p$r=szzlypmvy*1=6-pwxk1-a'
+SECRET_KEY = os.environ.get('SECRET_KEY', 
+    'django-insecure-33q@)3b-fl2_iefmum9s7l076p$r=szzlypmvy*1=6-pwxk1-a')
 
-DEBUG = True
+DEBUG = os.environ.get('DEBUG', 'False') == 'True'
 
 ALLOWED_HOSTS = ['*']
 
@@ -32,6 +38,7 @@ AUTH_USER_MODEL = 'accounts.User'
 MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
+    'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -59,24 +66,32 @@ TEMPLATES = [
 
 WSGI_APPLICATION = 'backend.wsgi.application'
 
-import pymysql
-pymysql.version_info = (2, 2, 1, "final", 0)
-pymysql.install_as_MySQLdb()
-
-DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.mysql',
-        'NAME': 'car_rental_db',
-        'USER': 'root',
-        'PASSWORD': '',
-        'HOST': '127.0.0.1',
-        'PORT': '3306',
-        'OPTIONS': {
-            'init_command': "SET sql_mode='STRICT_TRANS_TABLES'",
-            'charset': 'utf8mb4',
-        },
+# ── Database: Railway MySQL OR local MariaDB
+DATABASE_URL = os.environ.get('DATABASE_URL')
+if DATABASE_URL:
+    # Railway provides DATABASE_URL automatically
+    DATABASES = {
+        'default': dj_database_url.parse(DATABASE_URL, conn_max_age=600)
     }
-}
+else:
+    # Local development — XAMPP MariaDB
+    import pymysql
+    pymysql.version_info = (2, 2, 1, "final", 0)
+    pymysql.install_as_MySQLdb()
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.mysql',
+            'NAME': 'car_rental_db',
+            'USER': 'root',
+            'PASSWORD': '',
+            'HOST': '127.0.0.1',
+            'PORT': '3306',
+            'OPTIONS': {
+                'init_command': "SET sql_mode='STRICT_TRANS_TABLES'",
+                'charset': 'utf8mb4',
+            },
+        }
+    }
 
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': (
@@ -105,7 +120,9 @@ TIME_ZONE = 'Africa/Tunis'
 USE_I18N = True
 USE_TZ = True
 
-STATIC_URL = 'static/'
+STATIC_URL = '/static/'
+STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
+STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
 
 MEDIA_URL = '/media/'
 MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
@@ -120,21 +137,11 @@ CORS_ALLOW_HEADERS = [
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
-# ════════════════════════════════════════════
-# EMAIL — Gmail SMTP
-# ════════════════════════════════════════════
-# HOW TO GET APP PASSWORD (required):
-#   1. Create Gmail: waiebcarrent@gmail.com
-#   2. Go to: myaccount.google.com/security
-#   3. Enable "Validation en 2 étapes"
-#   4. Go to: myaccount.google.com/apppasswords
-#   5. Type app name "WaiebCar" → Créer
-#   6. Copy the 16-char password → paste in EMAIL_HOST_PASSWORD
-# ════════════════════════════════════════════
+# ── Email — Gmail SMTP
 EMAIL_BACKEND       = 'django.core.mail.backends.smtp.EmailBackend'
 EMAIL_HOST          = 'smtp.gmail.com'
 EMAIL_PORT          = 587
 EMAIL_USE_TLS       = True
-EMAIL_HOST_USER     = 'waiebcarrent2026@gmail.com'
-EMAIL_HOST_PASSWORD = 'kuojflphavqrrhzk'
-DEFAULT_FROM_EMAIL  = 'Waieb Car Rent <waiebcarrent2026@gmail.com>'
+EMAIL_HOST_USER     = os.environ.get('EMAIL_HOST_USER', 'waiebcarrent2026@gmail.com')
+EMAIL_HOST_PASSWORD = os.environ.get('EMAIL_HOST_PASSWORD', 'kuojflphavqrrhzk')
+DEFAULT_FROM_EMAIL  = f'Waieb Car Rent <{EMAIL_HOST_USER}>'
