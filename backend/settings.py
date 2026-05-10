@@ -145,3 +145,4 @@ EMAIL_USE_TLS       = True
 EMAIL_HOST_USER     = os.environ.get('EMAIL_HOST_USER', 'waiebcarrent2026@gmail.com')
 EMAIL_HOST_PASSWORD = os.environ.get('EMAIL_HOST_PASSWORD', 'kuojflphavqrrhzk')
 DEFAULT_FROM_EMAIL  = f'Waieb Car Rent <{EMAIL_HOST_USER}>'
+CSRF_TRUSTED_ORIGINS = ['https://web-production-e6e97.up.railway.app']
