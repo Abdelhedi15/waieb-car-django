@@ -1,9 +1,33 @@
+import threading
 from rest_framework import generics
 from rest_framework.response import Response
 from .models import Client, Reservation
 from .serializers import ClientSerializer, ReservationSerializer
-from django.core.mail import send_mail
 from django.conf import settings
+
+
+def _calculate_acompte(montant_total, date_debut, date_fin):
+    """
+    Acompte based on rental duration:
+    1-3 days  → 20%
+    4-7 days  → 30%
+    8-14 days → 40%
+    15+ days  → 50%
+    """
+    if not montant_total or not date_debut or not date_fin:
+        return round(float(montant_total) * 10 / 100, 2) if montant_total else 0
+
+    duree = (date_fin - date_debut).days
+    if duree <= 3:
+        pct = 20
+    elif duree <= 7:
+        pct = 30
+    elif duree <= 14:
+        pct = 40
+    else:
+        pct = 50
+
+    return round(float(montant_total) * pct / 100, 2)
 
 
 class ClientListView(generics.ListCreateAPIView):
@@ -21,7 +45,6 @@ class ReservationListView(generics.ListCreateAPIView):
 
     def get_queryset(self):
         user = self.request.user
-        # ── Client sees ONLY his own reservations
         if hasattr(user, 'role') and user.role == 'client':
             try:
                 client = user.client_profile
@@ -29,11 +52,19 @@ class ReservationListView(generics.ListCreateAPIView):
                     client=client).order_by('-id')
             except Exception:
                 return Reservation.objects.none()
-        # ── Admin/Employee sees ALL reservations
         return Reservation.objects.all().order_by('-id')
 
     def perform_create(self, serializer):
         reservation = serializer.save()
+        # Auto-calculate acompte based on duration
+        if reservation.montant_total:
+            acompte = _calculate_acompte(
+                reservation.montant_total,
+                reservation.date_debut,
+                reservation.date_fin
+            )
+            reservation.acompte = acompte
+            reservation.save()
         _sync_vehicle_status(reservation)
 
 
@@ -116,7 +147,7 @@ def _sync_vehicle_status(reservation):
 def _send_notification_email(reservation, statut):
     try:
         client = reservation.client
-        email  = client.email
+        email = client.email
         if not email:
             try:
                 if client.user and client.user.email:
@@ -124,24 +155,34 @@ def _send_notification_email(reservation, statut):
             except Exception:
                 pass
         if not email:
-            print(f'[email] No email found for client {client}')
+            print(f'[email] No email for client {client}')
             return
 
-        vehicle    = reservation.vehicle
+        vehicle = reservation.vehicle
         nom_client = f'{client.prenom} {client.nom}'
+        res_id = reservation.id
+        date_debut = reservation.date_debut
+        date_fin = reservation.date_fin
+        duree = (date_fin - date_debut).days
+        montant_total = reservation.montant_total
+        acompte = reservation.acompte
+        marque = vehicle.marque
+        modele = vehicle.modele
+        immatriculation = vehicle.immatriculation
 
         if statut == 'confirmée':
-            subject = '✅ Votre réservation est confirmée — Waieb Car'
+            subject = '✅ Votre réservation est confirmée — Waieb Car Rent'
             message = f"""Bonjour {nom_client},
 
 Excellente nouvelle ! Votre réservation a été confirmée.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-🚗  Véhicule   : {vehicle.marque} {vehicle.modele} ({vehicle.immatriculation})
-📅  Début      : {reservation.date_debut}
-📅  Fin        : {reservation.date_fin}
-💰  Total      : {reservation.montant_total} DT
-💳  Acompte    : {reservation.acompte} DT
+🚗  Véhicule      : {marque} {modele} ({immatriculation})
+📅  Début         : {date_debut}
+📅  Fin           : {date_fin}
+⏱️  Durée         : {duree} jour(s)
+💰  Total         : {montant_total} DT
+💳  Acompte dû    : {acompte} DT
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 Présentez-vous à notre agence à la date de début de votre location.
@@ -151,15 +192,15 @@ Cordialement,
 Waieb Car Rent 🚗
 """
         else:
-            subject = '❌ Votre réservation a été annulée — Waieb Car'
+            subject = '❌ Votre réservation a été annulée — Waieb Car Rent'
             message = f"""Bonjour {nom_client},
 
-Nous vous informons que votre réservation #{reservation.id} a été annulée.
+Nous vous informons que votre réservation #{res_id} a été annulée.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-🚗  Véhicule   : {vehicle.marque} {vehicle.modele}
-📅  Début      : {reservation.date_debut}
-📅  Fin        : {reservation.date_fin}
+🚗  Véhicule   : {marque} {modele}
+📅  Début      : {date_debut}
+📅  Fin        : {date_fin}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 Pour toute question, contactez-nous.
@@ -167,14 +208,24 @@ Pour toute question, contactez-nous.
 Cordialement,
 Waieb Car Rent 🚗
 """
-        send_mail(
-            subject=subject,
-            message=message,
-            from_email=settings.DEFAULT_FROM_EMAIL,
-            recipient_list=[email],
-            fail_silently=True,
-        )
-        print(f'[email] ✅ Sent to {email} — statut: {statut}')
+
+        def send_async():
+            try:
+                from django.core.mail import send_mail
+                send_mail(
+                    subject=subject,
+                    message=message,
+                    from_email=settings.DEFAULT_FROM_EMAIL,
+                    recipient_list=[email],
+                    fail_silently=False,
+                )
+                print(f'[email] ✅ Sent to {email} — statut: {statut}')
+            except Exception as e:
+                print(f'[email] ❌ Error: {e}')
+
+        thread = threading.Thread(target=send_async)
+        thread.daemon = True
+        thread.start()
 
     except Exception as e:
-        print(f'[email] ❌ Error: {e}')
+        print(f'[email] ❌ Setup error: {e}')
