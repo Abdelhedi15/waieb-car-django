@@ -66,15 +66,13 @@ TEMPLATES = [
 
 WSGI_APPLICATION = 'backend.wsgi.application'
 
-# ── Database: Railway MySQL OR local MariaDB
+# ── Database: Railway PostgreSQL OR local MariaDB
 DATABASE_URL = os.environ.get('DATABASE_URL')
 if DATABASE_URL:
-    # Railway provides DATABASE_URL automatically
     DATABASES = {
         'default': dj_database_url.parse(DATABASE_URL, conn_max_age=600)
     }
 else:
-    # Local development — XAMPP MariaDB
     import pymysql
     pymysql.version_info = (2, 2, 1, "final", 0)
     pymysql.install_as_MySQLdb()
@@ -137,12 +135,12 @@ CORS_ALLOW_HEADERS = [
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
-# ── Email — Gmail SMTP
+# ── Email — Gmail SMTP (new app password May 2026)
 EMAIL_BACKEND       = 'django.core.mail.backends.smtp.EmailBackend'
 EMAIL_HOST          = 'smtp.gmail.com'
 EMAIL_PORT          = 587
 EMAIL_USE_TLS       = True
 EMAIL_HOST_USER     = os.environ.get('EMAIL_HOST_USER', 'waiebcarrent2026@gmail.com')
-EMAIL_HOST_PASSWORD = os.environ.get('EMAIL_HOST_PASSWORD', 'kuojflphavqrrhzk')
+EMAIL_HOST_PASSWORD = os.environ.get('EMAIL_HOST_PASSWORD', 'lumgrvihnxxqfpfc')
 DEFAULT_FROM_EMAIL  = f'Waieb Car Rent <{EMAIL_HOST_USER}>'
 CSRF_TRUSTED_ORIGINS = ['https://web-production-e6e97.up.railway.app']
