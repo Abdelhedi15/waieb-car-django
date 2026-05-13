@@ -1,22 +1,15 @@
-import threading
+# -*- coding: utf-8 -*-
 from rest_framework import generics
 from rest_framework.response import Response
 from .models import Client, Reservation
 from .serializers import ClientSerializer, ReservationSerializer
 from django.conf import settings
+from django.core.mail import send_mail
 
 
 def _calculate_acompte(montant_total, date_debut, date_fin):
-    """
-    Acompte based on rental duration:
-    1-3 days  → 20%
-    4-7 days  → 30%
-    8-14 days → 40%
-    15+ days  → 50%
-    """
     if not montant_total or not date_debut or not date_fin:
         return round(float(montant_total) * 10 / 100, 2) if montant_total else 0
-
     duree = (date_fin - date_debut).days
     if duree <= 3:
         pct = 20
@@ -26,7 +19,6 @@ def _calculate_acompte(montant_total, date_debut, date_fin):
         pct = 40
     else:
         pct = 50
-
     return round(float(montant_total) * pct / 100, 2)
 
 
@@ -48,15 +40,13 @@ class ReservationListView(generics.ListCreateAPIView):
         if hasattr(user, 'role') and user.role == 'client':
             try:
                 client = user.client_profile
-                return Reservation.objects.filter(
-                    client=client).order_by('-id')
+                return Reservation.objects.filter(client=client).order_by('-id')
             except Exception:
                 return Reservation.objects.none()
         return Reservation.objects.all().order_by('-id')
 
     def perform_create(self, serializer):
         reservation = serializer.save()
-        # Auto-calculate acompte based on duration
         if reservation.montant_total:
             acompte = _calculate_acompte(
                 reservation.montant_total,
@@ -79,8 +69,9 @@ class ReservationDetailView(generics.RetrieveUpdateDestroyAPIView):
         response = self.update(request, *args, **kwargs)
         reservation = self.get_object()
         _sync_vehicle_status(reservation)
-        if old_statut != reservation.statut and reservation.statut in ['confirmée', 'annulée']:
-            _send_notification_email(reservation, reservation.statut)
+        new_statut = reservation.statut
+        if old_statut != new_statut and new_statut in ['confirmee', 'annulee', 'confirmée', 'annulée']:
+            _send_notification_email(reservation, new_statut)
         return response
 
     def update(self, request, *args, **kwargs):
@@ -88,8 +79,9 @@ class ReservationDetailView(generics.RetrieveUpdateDestroyAPIView):
         response = super().update(request, *args, **kwargs)
         reservation = self.get_object()
         _sync_vehicle_status(reservation)
-        if old_statut != reservation.statut and reservation.statut in ['confirmée', 'annulée']:
-            _send_notification_email(reservation, reservation.statut)
+        new_statut = reservation.statut
+        if old_statut != new_statut and new_statut in ['confirmee', 'annulee', 'confirmée', 'annulée']:
+            _send_notification_email(reservation, new_statut)
         return response
 
     def destroy(self, request, *args, **kwargs):
@@ -100,7 +92,7 @@ class ReservationDetailView(generics.RetrieveUpdateDestroyAPIView):
             vehicle = Vehicle.objects.get(id=reservation.vehicle_id)
             active = Reservation.objects.filter(
                 vehicle_id=vehicle.id,
-                statut__in=['en_attente', 'confirmée']
+                statut__in=['en_attente', 'confirmee', 'confirmée']
             ).exists()
             if not active:
                 vehicle.statut = 'disponible'
@@ -121,8 +113,9 @@ class ReservationPatchView(generics.UpdateAPIView):
         response = self.update(request, *args, **kwargs)
         reservation = self.get_object()
         _sync_vehicle_status(reservation)
-        if old_statut != reservation.statut and reservation.statut in ['confirmée', 'annulée']:
-            _send_notification_email(reservation, reservation.statut)
+        new_statut = reservation.statut
+        if old_statut != new_statut and new_statut in ['confirmee', 'annulee', 'confirmée', 'annulée']:
+            _send_notification_email(reservation, new_statut)
         return response
 
 
@@ -130,12 +123,13 @@ def _sync_vehicle_status(reservation):
     try:
         from vehicles.models import Vehicle
         vehicle = Vehicle.objects.get(id=reservation.vehicle_id)
-        if reservation.statut == 'confirmée':
-            vehicle.statut = 'loué'
-        elif reservation.statut in ['annulée', 'terminée']:
+        statut = reservation.statut
+        if statut in ['confirmee', 'confirmée']:
+            vehicle.statut = 'loue'
+        elif statut in ['annulee', 'annulée', 'terminee', 'terminée']:
             other_active = Reservation.objects.filter(
                 vehicle_id=vehicle.id,
-                statut='confirmée'
+                statut__in=['confirmee', 'confirmée']
             ).exclude(id=reservation.id).exists()
             if not other_active:
                 vehicle.statut = 'disponible'
@@ -170,62 +164,49 @@ def _send_notification_email(reservation, statut):
         modele = vehicle.modele
         immatriculation = vehicle.immatriculation
 
-        if statut == 'confirmée':
-            subject = '✅ Votre réservation est confirmée — Waieb Car Rent'
-            message = f"""Bonjour {nom_client},
+        is_confirmed = statut in ['confirmee', 'confirmée']
 
-Excellente nouvelle ! Votre réservation a été confirmée.
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-🚗  Véhicule      : {marque} {modele} ({immatriculation})
-📅  Début         : {date_debut}
-📅  Fin           : {date_fin}
-⏱️  Durée         : {duree} jour(s)
-💰  Total         : {montant_total} DT
-💳  Acompte dû    : {acompte} DT
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-Présentez-vous à notre agence à la date de début de votre location.
-N'oubliez pas votre CIN et permis de conduire.
-
-Cordialement,
-Waieb Car Rent 🚗
-"""
+        if is_confirmed:
+            subject = 'Votre reservation est confirmee - Waieb Car Rent'
+            message = (
+                f"Bonjour {nom_client},\n\n"
+                f"Excellente nouvelle ! Votre reservation a ete confirmee.\n\n"
+                f"------------------------------\n"
+                f"Vehicule      : {marque} {modele} ({immatriculation})\n"
+                f"Debut         : {date_debut}\n"
+                f"Fin           : {date_fin}\n"
+                f"Duree         : {duree} jour(s)\n"
+                f"Total         : {montant_total} DT\n"
+                f"Acompte du    : {acompte} DT\n"
+                f"------------------------------\n\n"
+                f"Presentez-vous a notre agence a la date de debut de votre location.\n"
+                f"N'oubliez pas votre CIN et permis de conduire.\n\n"
+                f"Cordialement,\n"
+                f"Waieb Car Rent"
+            )
         else:
-            subject = '❌ Votre réservation a été annulée — Waieb Car Rent'
-            message = f"""Bonjour {nom_client},
+            subject = 'Votre reservation a ete annulee - Waieb Car Rent'
+            message = (
+                f"Bonjour {nom_client},\n\n"
+                f"Nous vous informons que votre reservation #{res_id} a ete annulee.\n\n"
+                f"------------------------------\n"
+                f"Vehicule   : {marque} {modele}\n"
+                f"Debut      : {date_debut}\n"
+                f"Fin        : {date_fin}\n"
+                f"------------------------------\n\n"
+                f"Pour toute question, contactez-nous.\n\n"
+                f"Cordialement,\n"
+                f"Waieb Car Rent"
+            )
 
-Nous vous informons que votre réservation #{res_id} a été annulée.
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-🚗  Véhicule   : {marque} {modele}
-📅  Début      : {date_debut}
-📅  Fin        : {date_fin}
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-Pour toute question, contactez-nous.
-
-Cordialement,
-Waieb Car Rent 🚗
-"""
-
-        def send_async():
-            try:
-                from django.core.mail import send_mail
-                send_mail(
-                    subject=subject,
-                    message=message,
-                    from_email=settings.DEFAULT_FROM_EMAIL,
-                    recipient_list=[email],
-                    fail_silently=False,
-                )
-                print(f'[email] ✅ Sent to {email} — statut: {statut}')
-            except Exception as e:
-                print(f'[email] ❌ Error: {e}')
-
-        thread = threading.Thread(target=send_async)
-        thread.daemon = True
-        thread.start()
+        send_mail(
+            subject=subject,
+            message=message,
+            from_email=settings.DEFAULT_FROM_EMAIL,
+            recipient_list=[email],
+            fail_silently=False,
+        )
+        print(f'[email] Sent to {email} - statut: {statut}')
 
     except Exception as e:
-        print(f'[email] ❌ Setup error: {e}')
+        print(f'[email] ERROR: {e}')
