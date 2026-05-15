@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 import random
 import string
+import threading
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status, generics
@@ -13,6 +14,24 @@ from .models import User
 from .serializers import UserSerializer
 
 
+def _send_email_async(subject, message, recipient):
+    """Send email in background thread to avoid blocking Railway worker."""
+    def _send():
+        try:
+            send_mail(
+                subject=subject,
+                message=message,
+                from_email=settings.DEFAULT_FROM_EMAIL,
+                recipient_list=[recipient],
+                fail_silently=True,
+            )
+            print(f'[email] Sent to {recipient}')
+        except Exception as e:
+            print(f'[email] Error: {e}')
+    t = threading.Thread(target=_send, daemon=True)
+    t.start()
+
+
 class LoginView(APIView):
     permission_classes = []
 
@@ -20,10 +39,8 @@ class LoginView(APIView):
         username = request.data.get('username', '').strip()
         password = request.data.get('password', '')
 
-        # Try login with username directly
         user = authenticate(username=username, password=password)
 
-        # If failed, try finding user by email then authenticate
         if not user:
             try:
                 u = User.objects.get(email__iexact=username)
@@ -93,47 +110,31 @@ class ForgotPasswordView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        # Find user by email (case insensitive)
         try:
             user = User.objects.get(email__iexact=email)
         except User.DoesNotExist:
-            # Security: don't reveal if email exists or not
             return Response(
-                {'detail': 'Si cet email existe, un mot de passe temporaire a ete envoye.'},
+                {'detail': 'Mot de passe temporaire envoye par email.'},
                 status=status.HTTP_200_OK
             )
 
-        # Generate random 8-char password
         chars = string.ascii_letters + string.digits
         new_password = ''.join(random.choices(chars, k=8))
 
-        # Set new password
         user.set_password(new_password)
         user.save()
 
-        # Send email
-        try:
-            send_mail(
-                subject='Reinitialisation de mot de passe - Waieb Car Rent',
-                message=(
-                    f"Bonjour {user.prenom} {user.nom},\n\n"
-                    f"Votre nouveau mot de passe temporaire est :\n\n"
-                    f"    {new_password}\n\n"
-                    f"Connectez-vous avec ce mot de passe et changez-le dans votre profil.\n\n"
-                    f"Cordialement,\n"
-                    f"Waieb Car Rent"
-                ),
-                from_email=settings.DEFAULT_FROM_EMAIL,
-                recipient_list=[email],
-                fail_silently=False,
-            )
-            print(f'[forgot_password] Sent to {email}')
-        except Exception as e:
-            print(f'[forgot_password] Email error: {e}')
-            return Response(
-                {'detail': 'Erreur envoi email. Contactez le support.'},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
+        subject = 'Reinitialisation mot de passe - Waieb Car Rent'
+        message = (
+            f"Bonjour {user.prenom} {user.nom},\n\n"
+            f"Votre nouveau mot de passe temporaire est :\n\n"
+            f"    {new_password}\n\n"
+            f"Connectez-vous avec ce mot de passe.\n"
+            f"Changez-le dans votre profil apres connexion.\n\n"
+            f"Cordialement,\n"
+            f"Waieb Car Rent"
+        )
+        _send_email_async(subject, message, email)
 
         return Response(
             {'detail': 'Mot de passe temporaire envoye par email.'},
@@ -154,7 +155,6 @@ class UserListView(generics.ListCreateAPIView):
         data     = request.data.copy()
         password = data.get('password')
         role     = data.get('role', 'employee')
-
         email    = data.get('email', '').strip()
         username = data.get('username', email).strip()
 
@@ -184,7 +184,6 @@ class UserListView(generics.ListCreateAPIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        # Auto-create Client profile when role is 'client'
         if role == 'client':
             try:
                 from rentals.models import Client
