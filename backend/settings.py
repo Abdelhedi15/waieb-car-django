@@ -12,7 +12,7 @@ INSTALLED_APPS = [
     'django.contrib.admin','django.contrib.auth','django.contrib.contenttypes',
     'django.contrib.sessions','django.contrib.messages','django.contrib.staticfiles',
     'rest_framework','corsheaders','rest_framework_simplejwt',
-    'accounts','vehicles','rentals','payments','contracts',
+    'accounts','vehicles','rentals','payments','contracts','tracking',
 ]
 AUTH_USER_MODEL = 'accounts.User'
 MIDDLEWARE = [
@@ -65,7 +65,7 @@ CORS_ALLOW_CREDENTIALS = True
 CORS_ALLOW_HEADERS = ['accept','accept-encoding','authorization','content-type','dnt','origin','user-agent','x-csrftoken','x-requested-with']
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
-# Resend API - replaces Gmail SMTP completely
 RESEND_API_KEY = os.environ.get('RESEND_API_KEY', 're_GfsnjSPu_JDbmqBTc5dfqTQyLdJA69rGa')
+ANTHROPIC_API_KEY = os.environ.get('ANTHROPIC_API_KEY', '')
 DEFAULT_FROM_EMAIL = 'Waieb Car Rent <onboarding@resend.dev>'
 CSRF_TRUSTED_ORIGINS = ['https://web-production-e6e97.up.railway.app']
