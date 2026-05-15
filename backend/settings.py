@@ -1,6 +1,5 @@
 # ════════════════════════════════════════════════════
-# backend/settings.py — REPLACE ENTIRE FILE with this
-# for Railway deployment
+# backend/settings.py
 # ════════════════════════════════════════════════════
 from pathlib import Path
 from datetime import timedelta
@@ -9,7 +8,7 @@ import dj_database_url
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-SECRET_KEY = os.environ.get('SECRET_KEY', 
+SECRET_KEY = os.environ.get('SECRET_KEY',
     'django-insecure-33q@)3b-fl2_iefmum9s7l076p$r=szzlypmvy*1=6-pwxk1-a')
 
 DEBUG = os.environ.get('DEBUG', 'False') == 'True'
@@ -66,7 +65,6 @@ TEMPLATES = [
 
 WSGI_APPLICATION = 'backend.wsgi.application'
 
-# ── Database: Railway PostgreSQL OR local MariaDB
 DATABASE_URL = os.environ.get('DATABASE_URL')
 if DATABASE_URL:
     DATABASES = {
@@ -135,12 +133,15 @@ CORS_ALLOW_HEADERS = [
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
-# ── Email — Gmail SMTP (new app password May 2026)
+# ── Email — Gmail SMTP port 465 SSL (more reliable on Railway)
 EMAIL_BACKEND       = 'django.core.mail.backends.smtp.EmailBackend'
 EMAIL_HOST          = 'smtp.gmail.com'
-EMAIL_PORT          = 587
-EMAIL_USE_TLS       = True
+EMAIL_PORT          = 465
+EMAIL_USE_TLS       = False
+EMAIL_USE_SSL       = True
 EMAIL_HOST_USER     = os.environ.get('EMAIL_HOST_USER', 'waiebcarrent2026@gmail.com')
 EMAIL_HOST_PASSWORD = os.environ.get('EMAIL_HOST_PASSWORD', 'lumgrvihnxxqfpfc')
-DEFAULT_FROM_EMAIL  = f'Waieb Car Rent <{EMAIL_HOST_USER}>'
+DEFAULT_FROM_EMAIL  = 'Waieb Car Rent <waiebcarrent2026@gmail.com>'
+EMAIL_TIMEOUT       = 10
+
 CSRF_TRUSTED_ORIGINS = ['https://web-production-e6e97.up.railway.app']
