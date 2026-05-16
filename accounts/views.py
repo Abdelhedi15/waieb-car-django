@@ -2,7 +2,7 @@
 import random
 import string
 import threading
-import resend
+import mailjet_rest
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status, generics
@@ -15,19 +15,28 @@ from .serializers import UserSerializer
 
 
 def _send_email(to, subject, body):
-    """Send email via Resend API in background thread."""
+    """Send email via Mailjet API in background thread."""
     def _run():
         try:
-            resend.api_key = settings.RESEND_API_KEY
-            resend.Emails.send({
-                "from": settings.DEFAULT_FROM_EMAIL,
-                "to": [to],
-                "subject": subject,
-                "text": body,
-            })
-            print(f'[resend] Sent to {to}')
+            client = mailjet_rest.Client(
+                auth=(settings.MAILJET_API_KEY, settings.MAILJET_SECRET_KEY),
+                version='v3.1'
+            )
+            data = {
+                'Messages': [{
+                    'From': {
+                        'Email': settings.MAILJET_FROM_EMAIL,
+                        'Name': settings.MAILJET_FROM_NAME,
+                    },
+                    'To': [{'Email': to}],
+                    'Subject': subject,
+                    'TextPart': body,
+                }]
+            }
+            result = client.send.create(data=data)
+            print(f'[mailjet] Sent to {to} - status {result.status_code}')
         except Exception as e:
-            print(f'[resend] Error: {e}')
+            print(f'[mailjet] Error: {e}')
     threading.Thread(target=_run, daemon=True).start()
 
 
@@ -105,6 +114,7 @@ class ForgotPasswordView(APIView):
         try:
             user = User.objects.get(email__iexact=email)
         except User.DoesNotExist:
+            # On retourne 200 même si email inexistant (sécurité)
             return Response({'detail': 'Mot de passe temporaire envoye par email.'}, status=status.HTTP_200_OK)
 
         new_password = ''.join(random.choices(string.ascii_letters + string.digits, k=8))
@@ -162,7 +172,6 @@ class UserListView(generics.ListCreateAPIView):
                     user=user, nom=data.get('nom', ''), prenom=data.get('prenom', ''),
                     email=email or None, telephone=data.get('telephone', ''),
                 )
-                # Welcome email
                 _send_email(
                     to=email,
                     subject='Bienvenue sur Waieb Car Rent !',
