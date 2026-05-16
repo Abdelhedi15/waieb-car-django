@@ -1,42 +1,40 @@
 # -*- coding: utf-8 -*-
 import threading
-import resend
+from django.conf import settings
 from rest_framework import generics
-from rest_framework.response import Response
 from .models import Client, Reservation
 from .serializers import ClientSerializer, ReservationSerializer
-from django.conf import settings
 
 
-def _send_email(to, subject, body):
-    """Send email via Resend API in background thread."""
+def _send_email_mailjet(to_email, to_name, subject, body):
+    """Send email via Mailjet API in background thread."""
     def _run():
         try:
-            resend.api_key = settings.RESEND_API_KEY
-            resend.Emails.send({
-                "from": settings.DEFAULT_FROM_EMAIL,
-                "to": [to],
-                "subject": subject,
-                "text": body,
-            })
-            print(f'[resend] Sent to {to}')
+            from mailjet_rest import Client as MJClient
+            mj = MJClient(auth=(settings.MAILJET_API_KEY, settings.MAILJET_SECRET_KEY), version='v3.1')
+            data = {
+                'Messages': [{
+                    'From': {'Email': settings.MAILJET_FROM_EMAIL, 'Name': settings.MAILJET_FROM_NAME},
+                    'To': [{'Email': to_email, 'Name': to_name}],
+                    'Subject': subject,
+                    'TextPart': body,
+                }]
+            }
+            result = mj.send.create(data=data)
+            print(f'[mailjet] Sent to {to_email} status={result.status_code}')
         except Exception as e:
-            print(f'[resend] Error: {e}')
+            print(f'[mailjet] Error: {e}')
     threading.Thread(target=_run, daemon=True).start()
 
 
 def _calculate_acompte(montant_total, date_debut, date_fin):
     if not montant_total or not date_debut or not date_fin:
-        return round(float(montant_total) * 10 / 100, 2) if montant_total else 0
+        return round(float(montant_total) * 20 / 100, 2) if montant_total else 0
     duree = (date_fin - date_debut).days
-    if duree <= 3:
-        pct = 20
-    elif duree <= 7:
-        pct = 30
-    elif duree <= 14:
-        pct = 40
-    else:
-        pct = 50
+    if duree <= 3: pct = 20
+    elif duree <= 7: pct = 30
+    elif duree <= 14: pct = 40
+    else: pct = 50
     return round(float(montant_total) * pct / 100, 2)
 
 
@@ -57,8 +55,7 @@ class ReservationListView(generics.ListCreateAPIView):
         user = self.request.user
         if hasattr(user, 'role') and user.role == 'client':
             try:
-                client = user.client_profile
-                return Reservation.objects.filter(client=client).order_by('-id')
+                return Reservation.objects.filter(client=user.client_profile).order_by('-id')
             except Exception:
                 return Reservation.objects.none()
         return Reservation.objects.all().order_by('-id')
@@ -66,11 +63,7 @@ class ReservationListView(generics.ListCreateAPIView):
     def perform_create(self, serializer):
         reservation = serializer.save()
         if reservation.montant_total:
-            acompte = _calculate_acompte(
-                reservation.montant_total,
-                reservation.date_debut,
-                reservation.date_fin
-            )
+            acompte = _calculate_acompte(reservation.montant_total, reservation.date_debut, reservation.date_fin)
             reservation.acompte = acompte
             reservation.save()
         _sync_vehicle_status(reservation)
@@ -87,8 +80,9 @@ class ReservationDetailView(generics.RetrieveUpdateDestroyAPIView):
         response = self.update(request, *args, **kwargs)
         reservation = self.get_object()
         _sync_vehicle_status(reservation)
-        if old_statut != reservation.statut and reservation.statut in ['confirmee', 'annulee']:
-            _send_notification_email(reservation, reservation.statut)
+        new_statut = reservation.statut
+        if old_statut != new_statut and new_statut in ['confirmee', 'annulee', 'confirmée', 'annulée']:
+            _send_notification_email(reservation, new_statut)
         return response
 
     def update(self, request, *args, **kwargs):
@@ -96,8 +90,9 @@ class ReservationDetailView(generics.RetrieveUpdateDestroyAPIView):
         response = super().update(request, *args, **kwargs)
         reservation = self.get_object()
         _sync_vehicle_status(reservation)
-        if old_statut != reservation.statut and reservation.statut in ['confirmee', 'annulee']:
-            _send_notification_email(reservation, reservation.statut)
+        new_statut = reservation.statut
+        if old_statut != new_statut and new_statut in ['confirmee', 'annulee', 'confirmée', 'annulée']:
+            _send_notification_email(reservation, new_statut)
         return response
 
     def destroy(self, request, *args, **kwargs):
@@ -106,10 +101,7 @@ class ReservationDetailView(generics.RetrieveUpdateDestroyAPIView):
         try:
             from vehicles.models import Vehicle
             vehicle = Vehicle.objects.get(id=reservation.vehicle_id)
-            active = Reservation.objects.filter(
-                vehicle_id=vehicle.id,
-                statut__in=['en_attente', 'confirmee']
-            ).exists()
+            active = Reservation.objects.filter(vehicle_id=vehicle.id, statut__in=['en_attente','confirmee','confirmée']).exists()
             if not active:
                 vehicle.statut = 'disponible'
                 vehicle.save()
@@ -129,8 +121,9 @@ class ReservationPatchView(generics.UpdateAPIView):
         response = self.update(request, *args, **kwargs)
         reservation = self.get_object()
         _sync_vehicle_status(reservation)
-        if old_statut != reservation.statut and reservation.statut in ['confirmee', 'annulee']:
-            _send_notification_email(reservation, reservation.statut)
+        new_statut = reservation.statut
+        if old_statut != new_statut and new_statut in ['confirmee', 'annulee', 'confirmée', 'annulée']:
+            _send_notification_email(reservation, new_statut)
         return response
 
 
@@ -138,17 +131,16 @@ def _sync_vehicle_status(reservation):
     try:
         from vehicles.models import Vehicle
         vehicle = Vehicle.objects.get(id=reservation.vehicle_id)
-        if reservation.statut == 'confirmee':
+        statut = reservation.statut
+        if statut in ['confirmee', 'confirmée']:
             vehicle.statut = 'loue'
-        elif reservation.statut in ['annulee', 'terminee']:
-            other_active = Reservation.objects.filter(
-                vehicle_id=vehicle.id, statut='confirmee'
-            ).exclude(id=reservation.id).exists()
-            if not other_active:
+        elif statut in ['annulee', 'annulée', 'terminee', 'terminée']:
+            other = Reservation.objects.filter(vehicle_id=vehicle.id, statut__in=['confirmee','confirmée']).exclude(id=reservation.id).exists()
+            if not other:
                 vehicle.statut = 'disponible'
         vehicle.save()
     except Exception as e:
-        print(f'[sync_vehicle_status] error: {e}')
+        print(f'[sync] error: {e}')
 
 
 def _send_notification_email(reservation, statut):
@@ -157,8 +149,7 @@ def _send_notification_email(reservation, statut):
         email = client.email
         if not email:
             try:
-                if client.user and client.user.email:
-                    email = client.user.email
+                email = client.user.email
             except Exception:
                 pass
         if not email:
@@ -172,8 +163,9 @@ def _send_notification_email(reservation, statut):
         duree = (date_fin - date_debut).days
         montant_total = reservation.montant_total
         acompte = reservation.acompte
+        is_confirmed = statut in ['confirmee', 'confirmée']
 
-        if statut == 'confirmee':
+        if is_confirmed:
             subject = 'Votre reservation est confirmee - Waieb Car Rent'
             body = (
                 f"Bonjour {nom_client},\n\n"
@@ -185,7 +177,7 @@ def _send_notification_email(reservation, statut):
                 f"Total    : {montant_total} DT\n"
                 f"Acompte  : {acompte} DT\n\n"
                 f"Presentez-vous a notre agence avec votre CIN et permis.\n\n"
-                f"Cordialement,\nWaieb Car Rent"
+                f"Cordialement,\nWaieb Car Rent\nTel: +216 74 000 001"
             )
         else:
             subject = 'Votre reservation a ete annulee - Waieb Car Rent'
@@ -199,7 +191,7 @@ def _send_notification_email(reservation, statut):
                 f"Cordialement,\nWaieb Car Rent"
             )
 
-        _send_email(to=email, subject=subject, body=body)
+        _send_email_mailjet(email, nom_client, subject, body)
 
     except Exception as e:
         print(f'[email] ERROR: {e}')

@@ -65,7 +65,15 @@ CORS_ALLOW_CREDENTIALS = True
 CORS_ALLOW_HEADERS = ['accept','accept-encoding','authorization','content-type','dnt','origin','user-agent','x-csrftoken','x-requested-with']
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
-RESEND_API_KEY = os.environ.get('RESEND_API_KEY', 're_GfsnjSPu_JDbmqBTc5dfqTQyLdJA69rGa')
-ANTHROPIC_API_KEY = os.environ.get('ANTHROPIC_API_KEY', '')
+# Mailjet — for client emails (confirmation, annulation)
+MAILJET_API_KEY    = os.environ.get('MAILJET_API_KEY', '8ebdd344298e8697f7e755a77a00e9ab')
+MAILJET_SECRET_KEY = os.environ.get('MAILJET_SECRET_KEY', '0ca860a4662fe85e035239de869e5949')
+MAILJET_FROM_EMAIL = 'waiebcarrent2026@gmail.com'
+MAILJET_FROM_NAME  = 'Waieb Car Rent'
+
+# Resend — for forgot password only
+RESEND_API_KEY   = os.environ.get('RESEND_API_KEY', 're_GfsnjSPu_JDbmqBTc5dfqTQyLdJA69rGa')
 DEFAULT_FROM_EMAIL = 'Waieb Car Rent <onboarding@resend.dev>'
+
+ANTHROPIC_API_KEY = os.environ.get('ANTHROPIC_API_KEY', '')
 CSRF_TRUSTED_ORIGINS = ['https://web-production-e6e97.up.railway.app']
