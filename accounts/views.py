@@ -15,7 +15,6 @@ from .serializers import UserSerializer
 
 
 def _send_email(to, subject, body):
-    """Send email via Mailjet API in background thread."""
     def _run():
         try:
             client = mailjet_rest.Client(
@@ -24,10 +23,7 @@ def _send_email(to, subject, body):
             )
             data = {
                 'Messages': [{
-                    'From': {
-                        'Email': settings.MAILJET_FROM_EMAIL,
-                        'Name': settings.MAILJET_FROM_NAME,
-                    },
+                    'From': {'Email': settings.MAILJET_FROM_EMAIL, 'Name': settings.MAILJET_FROM_NAME},
                     'To': [{'Email': to}],
                     'Subject': subject,
                     'TextPart': body,
@@ -46,7 +42,6 @@ class LoginView(APIView):
     def post(self, request):
         username = request.data.get('username', '').strip()
         password = request.data.get('password', '')
-
         user = authenticate(username=username, password=password)
         if not user:
             try:
@@ -54,7 +49,6 @@ class LoginView(APIView):
                 user = authenticate(username=u.username, password=password)
             except User.DoesNotExist:
                 pass
-
         if user:
             refresh = RefreshToken.for_user(user)
             client_id = None
@@ -110,17 +104,13 @@ class ForgotPasswordView(APIView):
         email = request.data.get('email', '').strip()
         if not email:
             return Response({'detail': 'Email requis'}, status=status.HTTP_400_BAD_REQUEST)
-
         try:
             user = User.objects.get(email__iexact=email)
         except User.DoesNotExist:
-            # On retourne 200 même si email inexistant (sécurité)
             return Response({'detail': 'Mot de passe temporaire envoye par email.'}, status=status.HTTP_200_OK)
-
         new_password = ''.join(random.choices(string.ascii_letters + string.digits, k=8))
         user.set_password(new_password)
         user.save()
-
         _send_email(
             to=email,
             subject='Reinitialisation mot de passe - Waieb Car Rent',
@@ -177,13 +167,31 @@ class UserListView(generics.ListCreateAPIView):
                     subject='Bienvenue sur Waieb Car Rent !',
                     body=(
                         f"Bonjour {data.get('prenom', '')} {data.get('nom', '')},\n\n"
-                        f"Votre compte a ete cree avec succes.\n"
-                        f"Email: {email}\n\n"
-                        f"Bonne location !\nWaieb Car Rent"
+                        f"Votre compte client a ete cree avec succes.\n"
+                        f"Email : {email}\n\n"
+                        f"Bonne location !\n\nCordialement,\nWaieb Car Rent"
                     )
                 )
             except Exception as e:
                 print(f'[UserListView] Client creation error: {e}')
+
+        elif role == 'employee' and email:
+            # ── Email automatique avec identifiants
+            _send_email(
+                to=email,
+                subject='Votre compte employe - Waieb Car Rent',
+                body=(
+                    f"Bonjour {data.get('prenom', '')} {data.get('nom', '')},\n\n"
+                    f"Un compte employe a ete cree pour vous sur Waieb Car Rent.\n\n"
+                    f"Vos identifiants de connexion :\n"
+                    f"  Nom d'utilisateur : {username}\n"
+                    f"  Mot de passe      : {password}\n\n"
+                    f"Connectez-vous sur l'application mobile Waieb Car.\n"
+                    f"Changez votre mot de passe apres la premiere connexion.\n\n"
+                    f"Cordialement,\nWaieb Car Rent\nTel : +216 74 000 001"
+                )
+            )
+            print(f'[UserListView] Employee welcome email sent to {email}')
 
         return Response(UserSerializer(user).data, status=status.HTTP_201_CREATED)
 
