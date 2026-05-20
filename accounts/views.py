@@ -136,21 +136,26 @@ class UserListView(generics.ListCreateAPIView):
 
     def create(self, request, *args, **kwargs):
         data = request.data.copy()
-        password = data.get('password')
         role = data.get('role', 'employee')
         email = data.get('email', '').strip()
         username = data.get('username', email).strip()
 
+        # ── Toujours générer le mot de passe automatiquement ──
+        auto_password = ''.join(random.choices(string.ascii_letters + string.digits, k=10))
+
         if User.objects.filter(username__iexact=username).exists():
-            return Response({'detail': 'Email deja utilise'}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({'detail': 'Nom d\'utilisateur déjà utilisé'}, status=status.HTTP_400_BAD_REQUEST)
         if email and User.objects.filter(email__iexact=email).exists():
-            return Response({'detail': 'Email deja utilise'}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({'detail': 'Email déjà utilisé'}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
             user = User.objects.create_user(
-                username=username, password=password,
-                nom=data.get('nom', ''), prenom=data.get('prenom', ''),
-                email=email, role=role,
+                username=username,
+                password=auto_password,
+                nom=data.get('nom', ''),
+                prenom=data.get('prenom', ''),
+                email=email,
+                role=role,
             )
         except Exception as e:
             return Response({'detail': str(e)}, status=status.HTTP_400_BAD_REQUEST)
@@ -175,23 +180,24 @@ class UserListView(generics.ListCreateAPIView):
             except Exception as e:
                 print(f'[UserListView] Client creation error: {e}')
 
-        elif role == 'employee' and email:
-            # ── Email automatique avec identifiants
+        elif role in ('employee', 'admin') and email:
+            role_label = 'employé' if role == 'employee' else 'administrateur'
+            app_url = 'l\'application mobile Waieb Car' if role == 'employee' else 'https://waieb-car-react.vercel.app/login'
             _send_email(
                 to=email,
-                subject='Votre compte employe - Waieb Car Rent',
+                subject=f'Votre compte {role_label} - Waieb Car Rent',
                 body=(
                     f"Bonjour {data.get('prenom', '')} {data.get('nom', '')},\n\n"
-                    f"Un compte employe a ete cree pour vous sur Waieb Car Rent.\n\n"
+                    f"Un compte {role_label} a ete cree pour vous sur Waieb Car Rent.\n\n"
                     f"Vos identifiants de connexion :\n"
                     f"  Nom d'utilisateur : {username}\n"
-                    f"  Mot de passe      : {password}\n\n"
-                    f"Connectez-vous sur l'application mobile Waieb Car.\n"
+                    f"  Mot de passe      : {auto_password}\n\n"
+                    f"Connectez-vous sur : {app_url}\n"
                     f"Changez votre mot de passe apres la premiere connexion.\n\n"
-                    f"Cordialement,\nWaieb Car Rent\nTel : +216 74 000 001"
+                    f"Cordialement,\nWaieb Car Rent"
                 )
             )
-            print(f'[UserListView] Employee welcome email sent to {email}')
+            print(f'[UserListView] Welcome email sent to {email} (role={role})')
 
         return Response(UserSerializer(user).data, status=status.HTTP_201_CREATED)
 
