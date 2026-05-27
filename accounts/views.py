@@ -77,8 +77,6 @@ class LogoutView(APIView):
         return Response({'message': 'Deconnecte'})
 
 
-# Remplace la class MeView dans accounts/views.py
-
 class MeView(APIView):
     def get(self, request):
         user = request.user
@@ -88,7 +86,6 @@ class MeView(APIView):
         except Exception:
             pass
 
-        # Calcul points depuis les réservations
         try:
             points_gagnes = user.points_gagnes
             points_disponibles = user.points_disponibles
@@ -109,10 +106,14 @@ class MeView(APIView):
             'points_utilises': user.points_utilises,
             'points_disponibles': points_disponibles,
             'solde_wallet': float(user.solde_wallet),
+            # ✅ Réductions en attente pour la prochaine réservation
+            'reduction_wallet_pending': float(getattr(user, 'reduction_wallet_pending', 0) or 0),
+            'reduction_fidelite_pending': float(getattr(user, 'reduction_fidelite_pending', 0) or 0),
+            'points_fidelite_pending': int(getattr(user, 'points_fidelite_pending', 0) or 0),
         })
 
     def patch(self, request):
-        """Met à jour points_utilises et/ou solde_wallet après échange."""
+        """Met à jour points_utilises, solde_wallet et réductions en attente."""
         user = request.user
         data = request.data
 
@@ -120,6 +121,17 @@ class MeView(APIView):
             user.points_utilises = int(data['points_utilises'])
         if 'solde_wallet' in data:
             user.solde_wallet = float(data['solde_wallet'])
+
+        # ✅ Stocker réductions en attente
+        if 'reduction_wallet_pending' in data:
+            if hasattr(user, 'reduction_wallet_pending'):
+                user.reduction_wallet_pending = float(data['reduction_wallet_pending'])
+        if 'reduction_fidelite_pending' in data:
+            if hasattr(user, 'reduction_fidelite_pending'):
+                user.reduction_fidelite_pending = float(data['reduction_fidelite_pending'])
+        if 'points_fidelite_pending' in data:
+            if hasattr(user, 'points_fidelite_pending'):
+                user.points_fidelite_pending = int(data['points_fidelite_pending'])
 
         user.save()
         return Response({'status': 'updated'})
@@ -168,7 +180,6 @@ class UserListView(generics.ListCreateAPIView):
         email = data.get('email', '').strip()
         username = data.get('username', email).strip()
 
-        # ── Toujours générer le mot de passe automatiquement ──
         auto_password = ''.join(random.choices(string.ascii_letters + string.digits, k=10))
 
         if User.objects.filter(username__iexact=username).exists():
@@ -225,7 +236,6 @@ class UserListView(generics.ListCreateAPIView):
                     f"Cordialement,\nWaieb Car Rent"
                 )
             )
-            print(f'[UserListView] Welcome email sent to {email} (role={role})')
 
         return Response(UserSerializer(user).data, status=status.HTTP_201_CREATED)
 
