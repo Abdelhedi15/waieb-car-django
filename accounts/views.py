@@ -77,6 +77,8 @@ class LogoutView(APIView):
         return Response({'message': 'Deconnecte'})
 
 
+# Remplace la class MeView dans accounts/views.py
+
 class MeView(APIView):
     def get(self, request):
         user = request.user
@@ -85,6 +87,15 @@ class MeView(APIView):
             client_id = user.client_profile.id
         except Exception:
             pass
+
+        # Calcul points depuis les réservations
+        try:
+            points_gagnes = user.points_gagnes
+            points_disponibles = user.points_disponibles
+        except Exception:
+            points_gagnes = 0
+            points_disponibles = max(0, -user.points_utilises)
+
         return Response({
             'id': user.id,
             'client_id': client_id,
@@ -94,7 +105,24 @@ class MeView(APIView):
             'role': user.role,
             'email': user.email,
             'telephone': getattr(user, 'telephone', ''),
+            'points_gagnes': points_gagnes,
+            'points_utilises': user.points_utilises,
+            'points_disponibles': points_disponibles,
+            'solde_wallet': float(user.solde_wallet),
         })
+
+    def patch(self, request):
+        """Met à jour points_utilises et/ou solde_wallet après échange."""
+        user = request.user
+        data = request.data
+
+        if 'points_utilises' in data:
+            user.points_utilises = int(data['points_utilises'])
+        if 'solde_wallet' in data:
+            user.solde_wallet = float(data['solde_wallet'])
+
+        user.save()
+        return Response({'status': 'updated'})
 
 
 class ForgotPasswordView(APIView):
