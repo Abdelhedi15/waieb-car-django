@@ -13,7 +13,6 @@ from rentals.models import Client
 
 
 def _send_email_mailjet(to_email, to_name, subject, body):
-    """Send email via Mailjet for client notifications."""
     def _run():
         try:
             from mailjet_rest import Client as MJClient
@@ -34,7 +33,6 @@ def _send_email_mailjet(to_email, to_name, subject, body):
 
 
 def _send_email_resend(to, subject, body):
-    """Send via Resend for forgot-password."""
     def _run():
         try:
             resend.api_key = settings.RESEND_API_KEY
@@ -50,7 +48,6 @@ def _send_email_resend(to, subject, body):
     threading.Thread(target=_run, daemon=True).start()
 
 
-# Keep backward compat
 def _send_email(to, subject, body):
     _send_email_resend(to, subject, body)
 
@@ -72,7 +69,12 @@ class UpdateLocationView(APIView):
             client=client,
             defaults={'latitude': float(lat), 'longitude': float(lng), 'is_sharing': is_sharing}
         )
-        return Response({'status': 'ok', 'latitude': loc.latitude, 'longitude': loc.longitude, 'updated_at': loc.updated_at})
+        return Response({
+            'status': 'ok',
+            'latitude': loc.latitude,
+            'longitude': loc.longitude,
+            'updated_at': loc.updated_at
+        })
 
 
 class AllLocationsView(APIView):
@@ -103,33 +105,74 @@ class StopSharingView(APIView):
 
 
 ANTHROPIC_API_KEY = os.environ.get('ANTHROPIC_API_KEY', '')
-SYSTEM_PROMPT = """Tu es l'assistant de Waieb Car Rent, une agence de location de voitures a Sfax, Tunisie.
-Tu reponds aux questions des clients sur:
-- Les vehicules disponibles et leurs prix (a partir de 130 DT/jour)
-- Les reservations et le processus de location
-- Les documents requis (CIN, permis de conduire)
-- Les horaires: Lun-Sam 8h00-19h00
-- L'adresse: Rue Taher Sfar, Sfax 3000
-- L'acompte: 20% pour 1-3j, 30% pour 4-7j, 40% pour 8-14j, 50% pour 15j+
-- Prix saisonniers: +25% juin/sept, +50% juil/aout
-- La caution est obligatoire
-Reponds toujours en francais, de facon courte et professionnelle."""
+
+SYSTEM_PROMPT = """Tu es l'assistant virtuel de Waieb Car, une agence de location de véhicules à Sfax, Tunisie.
+Tu t'appelles "Waieb Assistant" et tu réponds toujours en français, de façon professionnelle et concise.
+
+Informations sur l'agence :
+- Service : Location de véhicules courte et longue durée
+- Email : waiebcarrent2026@gmail.com
+- Horaires : Lundi-Samedi 8h00-19h00
+- Adresse : Rue Taher Sfar, Sfax 3000
+- Paiement : carte bancaire (acompte) ou espèces au bureau (RDV requis)
+- Acompte : 20% pour 1-3j, 30% pour 4-7j, 40% pour 8-14j, 50% pour 15j+
+- Prix saisonniers : +10% printemps, +30% été, +20% hiver/fêtes
+- Caution obligatoire à la prise en charge
+- Documents requis : CIN ou passeport + permis de conduire
+
+Ce que tu peux faire :
+- Expliquer comment faire une réservation via l'application
+- Informer sur les modes de paiement et les acomptes
+- Répondre aux questions sur les véhicules et les tarifs
+- Expliquer comment annuler ou modifier une réservation
+- Orienter vers l'email si nécessaire
+
+Si tu ne sais pas répondre, dis :
+"Je ne dispose pas de cette information. Contactez-nous par email : waiebcarrent2026@gmail.com"
+
+Réponds toujours de façon courte (2-3 phrases max sauf si plus de détails sont demandés).
+Ne mentionne jamais de numéro de téléphone."""
 
 
 def _call_claude(messages):
+    """Appel Claude IA — retourne une réponse intelligente sans numéro statique."""
     try:
+        if not ANTHROPIC_API_KEY:
+            return (
+                "Bonjour ! Je suis l'assistant Waieb Car. "
+                "Pour toute question, contactez-nous par email : waiebcarrent2026@gmail.com"
+            )
+
         resp = req_lib.post(
             'https://api.anthropic.com/v1/messages',
-            headers={'x-api-key': ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json'},
-            json={'model': 'claude-haiku-4-5-20251001', 'max_tokens': 300, 'system': SYSTEM_PROMPT, 'messages': messages},
+            headers={
+                'x-api-key': ANTHROPIC_API_KEY,
+                'anthropic-version': '2023-06-01',
+                'content-type': 'application/json'
+            },
+            json={
+                'model': 'claude-haiku-4-5-20251001',
+                'max_tokens': 300,
+                'system': SYSTEM_PROMPT,
+                'messages': messages
+            },
             timeout=15,
         )
         if resp.status_code == 200:
             return resp.json()['content'][0]['text']
-        return "Desolee, je ne peux pas repondre pour le moment. Appelez le +216 74 000 001."
+
+        # ✅ Plus de numéro statique — email uniquement
+        print(f'[claude] API error: {resp.status_code} {resp.text}')
+        return (
+            "Notre assistant est momentanément indisponible. "
+            "Contactez-nous par email : waiebcarrent2026@gmail.com"
+        )
     except Exception as e:
         print(f'[claude] error: {e}')
-        return "Service momentanement indisponible. Contactez-nous au +216 74 000 001."
+        return (
+            "Service temporairement indisponible. "
+            "Pour toute demande, écrivez-nous à : waiebcarrent2026@gmail.com"
+        )
 
 
 class ChatView(APIView):
@@ -141,7 +184,13 @@ class ChatView(APIView):
         except Exception:
             return Response([], status=200)
         messages = ChatMessage.objects.filter(client=client).order_by('created_at')
-        return Response([{'id': m.id, 'sender': m.sender, 'message': m.message, 'created_at': m.created_at, 'is_read': m.is_read} for m in messages])
+        return Response([{
+            'id': m.id,
+            'sender': m.sender,
+            'message': m.message,
+            'created_at': m.created_at,
+            'is_read': m.is_read
+        } for m in messages])
 
     def post(self, request):
         text = request.data.get('message', '').strip()
@@ -154,7 +203,10 @@ class ChatView(APIView):
 
         ChatMessage.objects.create(client=client, sender='client', message=text)
 
-        history = list(reversed(ChatMessage.objects.filter(client=client).order_by('-created_at')[:10]))
+        # Historique des 10 derniers messages pour le contexte
+        history = list(reversed(
+            ChatMessage.objects.filter(client=client).order_by('-created_at')[:10]
+        ))
         claude_messages = []
         for h in history:
             if h.sender == 'client':
@@ -164,7 +216,12 @@ class ChatView(APIView):
 
         bot_reply = _call_claude(claude_messages)
         bot_msg = ChatMessage.objects.create(client=client, sender='bot', message=bot_reply)
-        return Response({'id': bot_msg.id, 'sender': 'bot', 'message': bot_reply, 'created_at': bot_msg.created_at})
+        return Response({
+            'id': bot_msg.id,
+            'sender': 'bot',
+            'message': bot_reply,
+            'created_at': bot_msg.created_at
+        })
 
 
 class EmployeeChatView(APIView):
@@ -175,9 +232,12 @@ class EmployeeChatView(APIView):
         result = []
         for client in clients:
             last_msg = ChatMessage.objects.filter(client=client).order_by('-created_at').first()
-            unread = ChatMessage.objects.filter(client=client, sender='client', is_read=False).count()
+            unread = ChatMessage.objects.filter(
+                client=client, sender='client', is_read=False
+            ).count()
             result.append({
-                'client_id': client.id, 'client_name': f'{client.prenom} {client.nom}',
+                'client_id': client.id,
+                'client_name': f'{client.prenom} {client.nom}',
                 'telephone': client.telephone or '',
                 'last_message': last_msg.message if last_msg else '',
                 'last_message_time': last_msg.created_at if last_msg else None,
@@ -194,9 +254,16 @@ class EmployeeChatView(APIView):
             client = Client.objects.get(id=client_id)
         except Client.DoesNotExist:
             return Response({'detail': 'Client not found'}, status=404)
-        ChatMessage.objects.filter(client=client, sender='client', is_read=False).update(is_read=True)
+        ChatMessage.objects.filter(
+            client=client, sender='client', is_read=False
+        ).update(is_read=True)
         msg = ChatMessage.objects.create(client=client, sender='employee', message=text)
-        return Response({'id': msg.id, 'sender': 'employee', 'message': text, 'created_at': msg.created_at})
+        return Response({
+            'id': msg.id,
+            'sender': 'employee',
+            'message': text,
+            'created_at': msg.created_at
+        })
 
 
 class ClientChatHistoryView(APIView):
@@ -204,5 +271,12 @@ class ClientChatHistoryView(APIView):
 
     def get(self, request, client_id):
         messages = ChatMessage.objects.filter(client_id=client_id).order_by('created_at')
-        ChatMessage.objects.filter(client_id=client_id, sender='client', is_read=False).update(is_read=True)
-        return Response([{'id': m.id, 'sender': m.sender, 'message': m.message, 'created_at': m.created_at} for m in messages])
+        ChatMessage.objects.filter(
+            client_id=client_id, sender='client', is_read=False
+        ).update(is_read=True)
+        return Response([{
+            'id': m.id,
+            'sender': m.sender,
+            'message': m.message,
+            'created_at': m.created_at
+        } for m in messages])
