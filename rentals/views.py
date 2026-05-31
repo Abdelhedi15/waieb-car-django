@@ -38,6 +38,17 @@ def _calculate_acompte(montant_total, date_debut, date_fin):
     return round(float(montant_total) * pct / 100, 2)
 
 
+# ✅ Attribuer 100 points au client quand réservation terminée
+def _award_points(reservation):
+    try:
+        client = reservation.client
+        client.points_gagnes = (client.points_gagnes or 0) + 100
+        client.save(update_fields=['points_gagnes'])
+        print(f'[points] +100 pts → client {client.id} ({client.prenom} {client.nom}) | total: {client.points_gagnes}')
+    except Exception as e:
+        print(f'[points] error: {e}')
+
+
 class ClientListView(generics.ListCreateAPIView):
     queryset = Client.objects.all()
     serializer_class = ClientSerializer
@@ -79,20 +90,27 @@ class ReservationDetailView(generics.RetrieveUpdateDestroyAPIView):
         kwargs['partial'] = True
         response = self.update(request, *args, **kwargs)
         reservation = self.get_object()
-        _sync_vehicle_status(reservation)
         new_statut = reservation.statut
+        _sync_vehicle_status(reservation)
+        # Email confirmation/annulation
         if old_statut != new_statut and new_statut in ['confirmee', 'annulee', 'confirmée', 'annulée']:
             _send_notification_email(reservation, new_statut)
+        # ✅ Points fidélité quand terminée
+        if old_statut != new_statut and new_statut in ['terminee', 'terminée']:
+            _award_points(reservation)
         return response
 
     def update(self, request, *args, **kwargs):
         old_statut = self.get_object().statut
         response = super().update(request, *args, **kwargs)
         reservation = self.get_object()
-        _sync_vehicle_status(reservation)
         new_statut = reservation.statut
+        _sync_vehicle_status(reservation)
         if old_statut != new_statut and new_statut in ['confirmee', 'annulee', 'confirmée', 'annulée']:
             _send_notification_email(reservation, new_statut)
+        # ✅ Points fidélité quand terminée
+        if old_statut != new_statut and new_statut in ['terminee', 'terminée']:
+            _award_points(reservation)
         return response
 
     def destroy(self, request, *args, **kwargs):
@@ -120,10 +138,13 @@ class ReservationPatchView(generics.UpdateAPIView):
         kwargs['partial'] = True
         response = self.update(request, *args, **kwargs)
         reservation = self.get_object()
-        _sync_vehicle_status(reservation)
         new_statut = reservation.statut
+        _sync_vehicle_status(reservation)
         if old_statut != new_statut and new_statut in ['confirmee', 'annulee', 'confirmée', 'annulée']:
             _send_notification_email(reservation, new_statut)
+        # ✅ Points fidélité quand terminée
+        if old_statut != new_statut and new_statut in ['terminee', 'terminée']:
+            _award_points(reservation)
         return response
 
 

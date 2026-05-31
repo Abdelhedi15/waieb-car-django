@@ -80,18 +80,30 @@ class LogoutView(APIView):
 class MeView(APIView):
     def get(self, request):
         user = request.user
+
         client_id = None
+        client = None
         try:
-            client_id = user.client_profile.id
+            client = user.client_profile
+            client_id = client.id
         except Exception:
             pass
 
-        try:
-            points_gagnes = user.points_gagnes
-            points_disponibles = user.points_disponibles
-        except Exception:
-            points_gagnes = 0
-            points_disponibles = max(0, -user.points_utilises)
+        # ✅ Lire les points depuis client_profile (rentals.Client)
+        if client:
+            points_gagnes             = client.points_gagnes
+            points_utilises           = client.points_utilises
+            points_disponibles        = client.points_disponibles
+            reduction_wallet_pending  = float(client.reduction_wallet_pending or 0)
+            reduction_fidelite_pending= float(client.reduction_fidelite_pending or 0)
+            points_fidelite_pending   = int(client.points_fidelite_pending or 0)
+        else:
+            points_gagnes             = 0
+            points_utilises           = 0
+            points_disponibles        = 0
+            reduction_wallet_pending  = 0.0
+            reduction_fidelite_pending= 0.0
+            points_fidelite_pending   = 0
 
         return Response({
             'id': user.id,
@@ -103,37 +115,42 @@ class MeView(APIView):
             'email': user.email,
             'telephone': getattr(user, 'telephone', ''),
             'points_gagnes': points_gagnes,
-            'points_utilises': user.points_utilises,
+            'points_utilises': points_utilises,
             'points_disponibles': points_disponibles,
-            'solde_wallet': float(user.solde_wallet),
-            # ✅ Réductions en attente pour la prochaine réservation
-            'reduction_wallet_pending': float(getattr(user, 'reduction_wallet_pending', 0) or 0),
-            'reduction_fidelite_pending': float(getattr(user, 'reduction_fidelite_pending', 0) or 0),
-            'points_fidelite_pending': int(getattr(user, 'points_fidelite_pending', 0) or 0),
+            'solde_wallet': float(getattr(user, 'solde_wallet', 0) or 0),
+            'reduction_wallet_pending': reduction_wallet_pending,
+            'reduction_fidelite_pending': reduction_fidelite_pending,
+            'points_fidelite_pending': points_fidelite_pending,
         })
 
     def patch(self, request):
-        """Met à jour points_utilises, solde_wallet et réductions en attente."""
+        """Met à jour points_utilises et réductions en attente sur client_profile."""
         user = request.user
         data = request.data
 
-        if 'points_utilises' in data:
-            user.points_utilises = int(data['points_utilises'])
+        # ✅ Mettre à jour sur client_profile, pas sur User
+        try:
+            client = user.client_profile
+            if 'points_utilises' in data:
+                client.points_utilises = int(data['points_utilises'])
+            if 'reduction_wallet_pending' in data:
+                client.reduction_wallet_pending = float(data['reduction_wallet_pending'])
+            if 'reduction_fidelite_pending' in data:
+                client.reduction_fidelite_pending = float(data['reduction_fidelite_pending'])
+            if 'points_fidelite_pending' in data:
+                client.points_fidelite_pending = int(data['points_fidelite_pending'])
+            client.save()
+        except Exception as e:
+            print(f'[MeView PATCH] client_profile error: {e}')
+
+        # solde_wallet reste sur User
         if 'solde_wallet' in data:
-            user.solde_wallet = float(data['solde_wallet'])
+            try:
+                user.solde_wallet = float(data['solde_wallet'])
+                user.save()
+            except Exception as e:
+                print(f'[MeView PATCH] solde_wallet error: {e}')
 
-        # ✅ Stocker réductions en attente
-        if 'reduction_wallet_pending' in data:
-            if hasattr(user, 'reduction_wallet_pending'):
-                user.reduction_wallet_pending = float(data['reduction_wallet_pending'])
-        if 'reduction_fidelite_pending' in data:
-            if hasattr(user, 'reduction_fidelite_pending'):
-                user.reduction_fidelite_pending = float(data['reduction_fidelite_pending'])
-        if 'points_fidelite_pending' in data:
-            if hasattr(user, 'points_fidelite_pending'):
-                user.points_fidelite_pending = int(data['points_fidelite_pending'])
-
-        user.save()
         return Response({'status': 'updated'})
 
 
