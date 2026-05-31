@@ -3,7 +3,6 @@ from vehicles.models import Vehicle
 
 
 class Client(models.Model):
-    # ── Link to accounts_user for Flutter login
     user = models.OneToOneField(
         'accounts.User',
         null=True, blank=True,
@@ -20,6 +19,17 @@ class Client(models.Model):
     date_naissance = models.DateField(null=True, blank=True)
     note = models.IntegerField(null=True, blank=True, default=5)
     created_at = models.DateTimeField(auto_now_add=True)
+
+    # ✅ Champs points fidélité
+    points_gagnes = models.IntegerField(default=0)
+    points_utilises = models.IntegerField(default=0)
+    reduction_fidelite_pending = models.DecimalField(max_digits=8, decimal_places=2, default=0)
+    points_fidelite_pending = models.IntegerField(default=0)
+    reduction_wallet_pending = models.DecimalField(max_digits=8, decimal_places=2, default=0)
+
+    @property
+    def points_disponibles(self):
+        return self.points_gagnes - self.points_utilises
 
     def __str__(self):
         return f"{self.prenom} {self.nom}"
