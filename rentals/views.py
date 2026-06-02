@@ -52,25 +52,44 @@ def _award_points(reservation):
 
 
 def _sync_vehicle_status(reservation):
+    """
+    ✅ FIX PRINCIPAL: un véhicule est 'loue' SEULEMENT si une résa est EN COURS aujourd'hui.
+    Une résa future (ex: 10-17 juillet) ne doit PAS mettre le véhicule en 'loue' maintenant.
+    """
     try:
         from vehicles.models import Vehicle
         vehicle = Vehicle.objects.get(id=reservation.vehicle_id)
-        statut = reservation.statut
         today = timezone.now().date()
+        statut = reservation.statut
 
         if statut in ['confirmee', 'confirmée']:
-            if reservation.date_fin < today:
-                vehicle.statut = 'disponible'
-            else:
+            # ✅ FIX: loue SEULEMENT si la résa est EN COURS aujourd'hui
+            if reservation.date_debut <= today <= reservation.date_fin:
                 vehicle.statut = 'loue'
+            else:
+                # Résa future OU passée → vérifier si une autre résa est en cours
+                other_active_now = Reservation.objects.filter(
+                    vehicle_id=vehicle.id,
+                    statut__in=['confirmee', 'confirmée'],
+                    date_debut__lte=today,
+                    date_fin__gte=today,
+                ).exclude(id=reservation.id).exists()
+                if other_active_now:
+                    vehicle.statut = 'loue'
+                else:
+                    vehicle.statut = 'disponible'
+
         elif statut in ['annulee', 'annulée', 'terminee', 'terminée']:
-            other = Reservation.objects.filter(
+            # Vérifier si une autre résa est EN COURS aujourd'hui
+            other_active_now = Reservation.objects.filter(
                 vehicle_id=vehicle.id,
                 statut__in=['confirmee', 'confirmée'],
+                date_debut__lte=today,
                 date_fin__gte=today,
             ).exclude(id=reservation.id).exists()
-            if not other:
+            if not other_active_now:
                 vehicle.statut = 'disponible'
+
         vehicle.save()
     except Exception as e:
         print(f'[sync] error: {e}')
@@ -92,7 +111,6 @@ def _get_montant_restant(reservation):
         return max(0, montant_total - total_paye)
     except Exception as e:
         print(f'[montant_restant] error: {e}')
-        # Fallback: utiliser acompte uniquement
         acompte = float(reservation.acompte or 0)
         total = float(reservation.montant_total or 0)
         return max(0, total - acompte)
@@ -166,12 +184,14 @@ class ReservationDetailView(generics.RetrieveUpdateDestroyAPIView):
             from vehicles.models import Vehicle
             vehicle = Vehicle.objects.get(id=reservation.vehicle_id)
             today = timezone.now().date()
-            active = Reservation.objects.filter(
+            # ✅ FIX: libérer seulement si pas de résa EN COURS aujourd'hui
+            active_now = Reservation.objects.filter(
                 vehicle_id=vehicle.id,
                 statut__in=['en_attente', 'confirmee', 'confirmée'],
+                date_debut__lte=today,
                 date_fin__gte=today,
             ).exists()
-            if not active:
+            if not active_now:
                 vehicle.statut = 'disponible'
                 vehicle.save()
         except Exception:
@@ -227,9 +247,9 @@ class CheckPaymentsView(APIView):
                             '⚠️ Rappel paiement — Waieb Car Rent',
                             f"Bonjour {client.prenom} {client.nom},\n\n"
                             f"Votre location se termine DEMAIN ({r.date_fin}).\n"
-                            f"Véhicule : {r.vehicle.marque} {r.vehicle.modele}\n"
+                            f"Vehicule : {r.vehicle.marque} {r.vehicle.modele}\n"
                             f"Montant restant : {montant_restant:.2f} DT\n\n"
-                            f"Merci de régler ce montant lors de la restitution.\n\n"
+                            f"Merci de regler ce montant lors de la restitution.\n\n"
                             f"Cordialement,\nWaieb Car Rent"
                         )
                         results['emails_j1'].append({
@@ -249,20 +269,22 @@ class CheckPaymentsView(APIView):
                 montant_restant = _get_montant_restant(r)
                 if montant_restant > 0:
                     r.statut = 'annulée'
-                    r.notes = (r.notes or '') + f' | AUTO-ANNULÉ {today}: {montant_restant:.2f} DT non payé'
+                    r.notes = (r.notes or '') + f' | AUTO-ANNULE {today}: {montant_restant:.2f} DT non paye'
                     r.save()
                     try:
                         vehicle = r.vehicle
+                        # ✅ FIX: libérer seulement si pas de résa EN COURS aujourd'hui
                         still_active = Reservation.objects.filter(
                             vehicle_id=vehicle.id,
                             statut__in=['en_attente', 'confirmee', 'confirmée'],
+                            date_debut__lte=today,
                             date_fin__gte=today,
                         ).exclude(id=r.id).exists()
                         if not still_active:
                             vehicle.statut = 'disponible'
                             vehicle.save()
                     except Exception as ve:
-                        results['errors'].append(f'Véhicule #{r.id}: {str(ve)}')
+                        results['errors'].append(f'Vehicule #{r.id}: {str(ve)}')
                     results['annulations'].append({
                         'reservation': r.id,
                         'client': f'{r.client.prenom} {r.client.nom}',
@@ -283,7 +305,7 @@ class CheckPaymentsView(APIView):
 class SyncStatutsView(APIView):
     """
     GET /api/reservations/sync-statuts/
-    Libère les véhicules dont toutes les réservations sont terminées
+    ✅ FIX: 'loue' seulement si résa EN COURS aujourd'hui (pas future)
     """
     permission_classes = []
 
@@ -293,12 +315,14 @@ class SyncStatutsView(APIView):
         updated = []
 
         for vehicle in Vehicle.objects.filter(statut='loue'):
-            active = Reservation.objects.filter(
+            # ✅ FIX: vérifier si résa EN COURS aujourd'hui (date_debut <= today <= date_fin)
+            active_now = Reservation.objects.filter(
                 vehicle_id=vehicle.id,
                 statut__in=['confirmee', 'confirmée', 'en_attente'],
+                date_debut__lte=today,
                 date_fin__gte=today,
             ).exists()
-            if not active:
+            if not active_now:
                 vehicle.statut = 'disponible'
                 vehicle.save()
                 updated.append(f'{vehicle.marque} {vehicle.modele} ({vehicle.immatriculation})')
