@@ -29,19 +29,25 @@ class AvailableVehiclesView(APIView):
         date_fin   = request.query_params.get('date_fin')
         if not date_debut or not date_fin:
             return Response({'error': 'date_debut and date_fin required'}, status=400)
+
         from rentals.models import Reservation
+
+        # ✅ FIX: véhicules qui ont une réservation ACTIVE dans la période demandée
         reserved_ids = Reservation.objects.filter(
             statut__in=['en_attente', 'confirmée'],
             date_debut__lte=date_fin,
             date_fin__gte=date_debut
         ).values_list('vehicle_id', flat=True)
+
+        # ✅ FIX: inclure 'disponible' ET 'loue' (un véhicule loué peut être libre
+        # pour une autre période si aucune résa active ne chevauche)
+        # Exclure seulement: a_vendre, vendu, maintenance, hors_service
         available = Vehicle.objects.exclude(
             id__in=reserved_ids
-        ).filter(
-            statut='disponible'
         ).exclude(
-            statut__in=['a_vendre', 'vendu']  # ✅ exclure véhicules en vente
+            statut__in=['a_vendre', 'vendu', 'maintenance', 'hors_service']
         )
+
         return Response(VehicleSerializer(available, many=True).data)
 
 
