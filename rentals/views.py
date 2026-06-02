@@ -59,13 +59,11 @@ def _sync_vehicle_status(reservation):
         today = timezone.now().date()
 
         if statut in ['confirmee', 'confirmée']:
-            # ✅ Si date_fin passée → libérer automatiquement
             if reservation.date_fin < today:
                 vehicle.statut = 'disponible'
             else:
                 vehicle.statut = 'loue'
         elif statut in ['annulee', 'annulée', 'terminee', 'terminée']:
-            # Vérifier s'il y a d'autres réservations actives FUTURES
             other = Reservation.objects.filter(
                 vehicle_id=vehicle.id,
                 statut__in=['confirmee', 'confirmée'],
@@ -76,6 +74,28 @@ def _sync_vehicle_status(reservation):
         vehicle.save()
     except Exception as e:
         print(f'[sync] error: {e}')
+
+
+def _get_montant_restant(reservation):
+    """✅ FIX: utilise Paiement (pas Payment)"""
+    try:
+        from payments.models import Paiement, Avance
+        total_paiements = sum(
+            float(p.montant) for p in Paiement.objects.filter(reservation=reservation)
+        )
+        total_avances = sum(
+            float(a.montant_total) for a in Avance.objects.filter(reservation=reservation)
+        )
+        acompte = float(reservation.acompte or 0)
+        total_paye = total_paiements + total_avances + acompte
+        montant_total = float(reservation.montant_total or 0)
+        return max(0, montant_total - total_paye)
+    except Exception as e:
+        print(f'[montant_restant] error: {e}')
+        # Fallback: utiliser acompte uniquement
+        acompte = float(reservation.acompte or 0)
+        total = float(reservation.montant_total or 0)
+        return max(0, total - acompte)
 
 
 class ClientListView(generics.ListCreateAPIView):
@@ -178,7 +198,6 @@ class ReservationPatchView(generics.UpdateAPIView):
         return response
 
 
-# ✅ NOUVEAU: Vérification paiements + alertes + auto-annulation
 class CheckPaymentsView(APIView):
     """
     GET /api/reservations/check-payments/
@@ -190,7 +209,6 @@ class CheckPaymentsView(APIView):
     def get(self, request):
         today = timezone.now().date()
         tomorrow = today + timedelta(days=1)
-
         results = {'emails_j1': [], 'annulations': [], 'errors': []}
 
         # ── Email J-1
@@ -199,9 +217,7 @@ class CheckPaymentsView(APIView):
             date_fin=tomorrow,
         ):
             try:
-                from payments.models import Payment
-                total_paye = sum(float(p.montant) for p in Payment.objects.filter(reservation=r))
-                montant_restant = float(r.montant_total or 0) - total_paye
+                montant_restant = _get_montant_restant(r)
                 if montant_restant > 0:
                     client = r.client
                     email = client.email or (client.user.email if client.user else None)
@@ -230,14 +246,11 @@ class CheckPaymentsView(APIView):
             date_fin__lt=today,
         ):
             try:
-                from payments.models import Payment
-                total_paye = sum(float(p.montant) for p in Payment.objects.filter(reservation=r))
-                montant_restant = float(r.montant_total or 0) - total_paye
+                montant_restant = _get_montant_restant(r)
                 if montant_restant > 0:
                     r.statut = 'annulée'
                     r.notes = (r.notes or '') + f' | AUTO-ANNULÉ {today}: {montant_restant:.2f} DT non payé'
                     r.save()
-                    # Libérer le véhicule
                     try:
                         vehicle = r.vehicle
                         still_active = Reservation.objects.filter(
@@ -267,7 +280,6 @@ class CheckPaymentsView(APIView):
         })
 
 
-# ✅ NOUVEAU: Sync statuts véhicules
 class SyncStatutsView(APIView):
     """
     GET /api/reservations/sync-statuts/
