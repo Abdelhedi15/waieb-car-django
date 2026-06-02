@@ -89,21 +89,20 @@ class MeView(APIView):
         except Exception:
             pass
 
-        # ✅ Lire les points depuis client_profile (rentals.Client)
         if client:
-            points_gagnes             = client.points_gagnes
-            points_utilises           = client.points_utilises
-            points_disponibles        = client.points_disponibles
-            reduction_wallet_pending  = float(client.reduction_wallet_pending or 0)
-            reduction_fidelite_pending= float(client.reduction_fidelite_pending or 0)
-            points_fidelite_pending   = int(client.points_fidelite_pending or 0)
+            points_gagnes              = client.points_gagnes
+            points_utilises            = client.points_utilises
+            points_disponibles         = client.points_disponibles
+            reduction_wallet_pending   = float(client.reduction_wallet_pending or 0)
+            reduction_fidelite_pending = float(client.reduction_fidelite_pending or 0)
+            points_fidelite_pending    = int(client.points_fidelite_pending or 0)
         else:
-            points_gagnes             = 0
-            points_utilises           = 0
-            points_disponibles        = 0
-            reduction_wallet_pending  = 0.0
-            reduction_fidelite_pending= 0.0
-            points_fidelite_pending   = 0
+            points_gagnes              = 0
+            points_utilises            = 0
+            points_disponibles         = 0
+            reduction_wallet_pending   = 0.0
+            reduction_fidelite_pending = 0.0
+            points_fidelite_pending    = 0
 
         return Response({
             'id': user.id,
@@ -124,11 +123,9 @@ class MeView(APIView):
         })
 
     def patch(self, request):
-        """Met à jour points_utilises et réductions en attente sur client_profile."""
         user = request.user
         data = request.data
 
-        # ✅ Mettre à jour sur client_profile, pas sur User
         try:
             client = user.client_profile
             if 'points_utilises' in data:
@@ -143,7 +140,6 @@ class MeView(APIView):
         except Exception as e:
             print(f'[MeView PATCH] client_profile error: {e}')
 
-        # solde_wallet reste sur User
         if 'solde_wallet' in data:
             try:
                 user.solde_wallet = float(data['solde_wallet'])
@@ -272,18 +268,31 @@ class UserDetailView(generics.RetrieveUpdateDestroyAPIView):
             user.set_password(password)
         user.save()
         return Response(UserSerializer(user).data)
-    class InitPointsView(APIView):
-        permission_classes = []
+
+
+# ✅ Vue temporaire — initialiser points clients existants
+# À SUPPRIMER après utilisation !
+class InitPointsView(APIView):
+    permission_classes = []
+
     def get(self, request):
         from rentals.models import Client, Reservation
         updated = []
         for client in Client.objects.all():
             nb = Reservation.objects.filter(
                 client=client,
-                statut__in=['confirmée','confirmee','terminée','terminee']
+                statut__in=['confirmée', 'confirmee', 'terminée', 'terminee']
             ).count()
             if nb > 0 and client.points_gagnes == 0:
                 client.points_gagnes = nb * 100
                 client.save(update_fields=['points_gagnes'])
-                updated.append({'client': f'{client.prenom} {client.nom}', 'points': client.points_gagnes})
-        return Response({'status': 'done', 'updated': len(updated), 'details': updated})
+                updated.append({
+                    'client': f'{client.prenom} {client.nom}',
+                    'points': client.points_gagnes,
+                    'reservations': nb,
+                })
+        return Response({
+            'status': 'done',
+            'updated': len(updated),
+            'details': updated,
+        })
