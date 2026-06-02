@@ -272,3 +272,18 @@ class UserDetailView(generics.RetrieveUpdateDestroyAPIView):
             user.set_password(password)
         user.save()
         return Response(UserSerializer(user).data)
+    class InitPointsView(APIView):
+        permission_classes = []
+    def get(self, request):
+        from rentals.models import Client, Reservation
+        updated = []
+        for client in Client.objects.all():
+            nb = Reservation.objects.filter(
+                client=client,
+                statut__in=['confirmée','confirmee','terminée','terminee']
+            ).count()
+            if nb > 0 and client.points_gagnes == 0:
+                client.points_gagnes = nb * 100
+                client.save(update_fields=['points_gagnes'])
+                updated.append({'client': f'{client.prenom} {client.nom}', 'points': client.points_gagnes})
+        return Response({'status': 'done', 'updated': len(updated), 'details': updated})
