@@ -1,0 +1,8 @@
+﻿f = open('contracts/serializers.py', 'rb')
+content = f.read()
+f.close()
+clean = content.replace(b'\x00', b'')
+f = open('contracts/serializers.py', 'wb')
+f.write(clean)
+f.close()
+print('Fixed! Size:', len(clean))

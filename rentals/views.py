@@ -8,7 +8,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from .models import Client, Reservation
 from .serializers import ClientSerializer, ReservationSerializer
-
+from .models import Client, Reservation, Favori
 
 def _send_email_mailjet(to_email, to_name, subject, body):
     def _run():
@@ -375,3 +375,128 @@ def _send_notification_email(reservation, statut):
         _send_email_mailjet(email, nom_client, subject, body)
     except Exception as e:
         print(f'[email] ERROR: {e}')
+        
+        # Ajouter cette view à la fin de rentals/views.py
+# Et ajouter dans rentals/urls.py :
+# path('reservations/<int:pk>/payer-reste/', PayerResteView.as_view()),
+# AVANT le pattern <int:pk>
+
+class PayerResteView(APIView):
+    """
+    POST /api/reservations/{id}/payer-reste/
+    Marque la réservation comme soldée et envoie un email de confirmation de paiement.
+    Appelé depuis Flutter après que le client paie le restant (carte ou espèces).
+    """
+    def post(self, request, pk):
+        try:
+            reservation = Reservation.objects.get(pk=pk)
+            client = reservation.client
+            email = client.email or (client.user.email if hasattr(client, 'user') and client.user else None)
+
+            # Marquer acompte_paye = True si le champ existe
+            if hasattr(reservation, 'acompte_paye'):
+                reservation.acompte_paye = True
+                reservation.save(update_fields=['acompte_paye'])
+
+            # Calculer montant restant pour l'email
+            acompte = float(reservation.acompte or 0)
+            total = float(reservation.montant_total or 0)
+            restant = max(0, total - acompte)
+
+            mode = request.data.get('mode', 'carte')  # 'carte' ou 'especes'
+            rdv_date = request.data.get('rdv_date', '')
+            rdv_heure = request.data.get('rdv_heure', '')
+
+            if email:
+                vehicle = reservation.vehicle
+                nom_client = f'{client.prenom} {client.nom}'
+
+                if mode == 'carte':
+                    subject = '✅ Paiement reçu — Waieb Car Rent'
+                    body = (
+                        f"Bonjour {nom_client},\n\n"
+                        f"Nous avons bien reçu votre paiement du solde restant.\n\n"
+                        f"Réservation  : #{reservation.id}\n"
+                        f"Véhicule     : {vehicle.marque} {vehicle.modele} ({vehicle.immatriculation})\n"
+                        f"Période      : {reservation.date_debut} → {reservation.date_fin}\n"
+                        f"Montant payé : {restant:.2f} DT\n\n"
+                        f"Votre réservation est entièrement soldée. À bientôt !\n\n"
+                        f"Cordialement,\nWaieb Car Rent\n"
+                        f"waiebcarrent2026@gmail.com"
+                    )
+                else:
+                    subject = '📅 RDV enregistré — Paiement Waieb Car Rent'
+                    body = (
+                        f"Bonjour {nom_client},\n\n"
+                        f"Votre rendez-vous pour le paiement en espèces a bien été enregistré.\n\n"
+                        f"Réservation  : #{reservation.id}\n"
+                        f"Véhicule     : {vehicle.marque} {vehicle.modele} ({vehicle.immatriculation})\n"
+                        f"Période      : {reservation.date_debut} → {reservation.date_fin}\n"
+                        f"Montant dû   : {restant:.2f} DT\n"
+                        f"RDV          : {rdv_date} à {rdv_heure}\n\n"
+                        f"Présentez-vous à notre agence à l'heure du RDV avec votre CIN.\n"
+                        f"La réservation sera confirmée après paiement au bureau.\n\n"
+                        f"Cordialement,\nWaieb Car Rent\n"
+                        f"waiebcarrent2026@gmail.com"
+                    )
+
+                _send_email_mailjet(email, nom_client, subject, body)
+
+            return Response({'status': 'ok', 'email_sent': bool(email)})
+
+        except Reservation.DoesNotExist:
+            return Response({'error': 'Réservation introuvable'}, status=404)
+        except Exception as e:
+            print(f'[payer-reste] error: {e}')
+            return Response({'error': str(e)}, status=500)
+        
+        # ── Ajouter cet import en haut de rentals/views.py :
+# from .models import Client, Reservation, Favori
+# from .serializers import ClientSerializer, ReservationSerializer, FavoriSerializer
+
+class FavorisView(APIView):
+    """
+    GET  /api/favoris/              → liste des favoris du client connecté
+    POST /api/favoris/              → ajouter un favori  { "vehicle_id": 5 }
+    DELETE /api/favoris/{vehicle_id}/ → supprimer un favori
+    """
+    def _get_client(self, request):
+        try:
+            return request.user.client_profile
+        except Exception:
+            return None
+
+    def get(self, request):
+        client = self._get_client(request)
+        if not client:
+            return Response([], status=200)
+        from .serializers import FavoriSerializer
+        from .models import Favori
+        favoris = Favori.objects.filter(client=client).select_related('vehicle')
+        return Response(FavoriSerializer(favoris, many=True, context={'request': request}).data)
+
+    def post(self, request):
+        client = self._get_client(request)
+        if not client:
+            return Response({'error': 'Non authentifié'}, status=401)
+        vehicle_id = request.data.get('vehicle_id')
+        if not vehicle_id:
+            return Response({'error': 'vehicle_id requis'}, status=400)
+        try:
+            from vehicles.models import Vehicle
+            from .models import Favori
+            vehicle = Vehicle.objects.get(pk=vehicle_id)
+            favori, created = Favori.objects.get_or_create(client=client, vehicle=vehicle)
+            return Response({'status': 'added' if created else 'already_exists', 'id': favori.id})
+        except Vehicle.DoesNotExist:
+            return Response({'error': 'Véhicule introuvable'}, status=404)
+
+    def delete(self, request, vehicle_id=None):
+        client = self._get_client(request)
+        if not client:
+            return Response({'error': 'Non authentifié'}, status=401)
+        if not vehicle_id:
+            return Response({'error': 'vehicle_id requis'}, status=400)
+        from .models import Favori
+        deleted, _ = Favori.objects.filter(client=client, vehicle_id=vehicle_id).delete()
+        return Response({'status': 'removed' if deleted else 'not_found'})

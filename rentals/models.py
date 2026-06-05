@@ -20,12 +20,13 @@ class Client(models.Model):
     note = models.IntegerField(null=True, blank=True, default=5)
     created_at = models.DateTimeField(auto_now_add=True)
 
-    # ✅ Champs points fidélité
+    # Champs points fidélité
     points_gagnes = models.IntegerField(default=0)
     points_utilises = models.IntegerField(default=0)
     reduction_fidelite_pending = models.DecimalField(max_digits=8, decimal_places=2, default=0)
     points_fidelite_pending = models.IntegerField(default=0)
     reduction_wallet_pending = models.DecimalField(max_digits=8, decimal_places=2, default=0)
+    solde_wallet = models.DecimalField(max_digits=10, decimal_places=2, default=0)
 
     @property
     def points_disponibles(self):
@@ -51,6 +52,7 @@ class Reservation(models.Model):
     acompte = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
     caution = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True, default=0)
     notes = models.TextField(blank=True)
+    acompte_paye = models.BooleanField(default=False)
 
     # Remplacement véhicule
     vehicule_remplace = models.ForeignKey(
@@ -80,3 +82,16 @@ class Reservation(models.Model):
 
     def __str__(self):
         return f"Réservation #{self.id} - {self.client} - {self.vehicle}"
+
+
+# ✅ NOUVEAU — Favoris persistés en base
+class Favori(models.Model):
+    client = models.ForeignKey(Client, on_delete=models.CASCADE, related_name='favoris')
+    vehicle = models.ForeignKey(Vehicle, on_delete=models.CASCADE, related_name='favoris')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ('client', 'vehicle')  # pas de doublon possible
+
+    def __str__(self):
+        return f"{self.client} ❤️ {self.vehicle}"

@@ -1,0 +1,10 @@
+﻿import psycopg2
+conn = psycopg2.connect('postgresql://postgres:TTNEZNUOBAocivPNQaAiBSFMEHIMCnsy@gondola.proxy.rlwy.net:58090/railway')
+cur = conn.cursor()
+cur.execute('ALTER TABLE vehicles_vehicle DROP CONSTRAINT IF EXISTS vehicles_vehicle_statut_check')
+cur.execute("""ALTER TABLE vehicles_vehicle ADD CONSTRAINT vehicles_vehicle_statut_check CHECK (statut IN ('disponible','loue','loue','maintenance','hors_service','hors service','a_vendre','vendu'))""")
+conn.commit()
+print('OK - contrainte mise a jour')
+cur.execute('SELECT DISTINCT statut FROM vehicles_vehicle')
+print('Statuts actuels:', [r[0] for r in cur.fetchall()])
+conn.close()
