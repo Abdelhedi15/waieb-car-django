@@ -78,9 +78,8 @@ class ReservationSerializer(serializers.ModelSerializer):
     def get_client_prenom(self, obj):
         return obj.client.prenom if obj.client else ''
 
-    # ✅ VALIDATION CONFLIT — empêche double réservation même véhicule même période
     def validate(self, data):
-        vehicle   = data.get('vehicle')   or (self.instance.vehicle   if self.instance else None)
+        vehicle    = data.get('vehicle')    or (self.instance.vehicle    if self.instance else None)
         date_debut = data.get('date_debut') or (self.instance.date_debut if self.instance else None)
         date_fin   = data.get('date_fin')   or (self.instance.date_fin   if self.instance else None)
 
@@ -89,25 +88,20 @@ class ReservationSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError(
                     "La date de fin doit être après la date de début."
                 )
-
-            # Chercher conflits : réservations actives qui chevauchent la période
             qs = Reservation.objects.filter(
                 vehicle=vehicle,
                 statut__in=['en_attente', 'confirmée'],
                 date_debut__lt=date_fin,
                 date_fin__gt=date_debut,
             )
-            # Exclure la réservation courante en cas de mise à jour
             if self.instance:
                 qs = qs.exclude(pk=self.instance.pk)
-
             if qs.exists():
                 conflit = qs.first()
                 raise serializers.ValidationError(
                     f"Ce véhicule est déjà réservé du {conflit.date_debut} au {conflit.date_fin}. "
                     f"Veuillez choisir une autre période ou un autre véhicule."
                 )
-
         return data
 
 
@@ -123,7 +117,6 @@ class ReservationDetailSerializer(serializers.ModelSerializer):
         return f"{obj.vehicle.marque} {obj.vehicle.modele} - {obj.vehicle.immatriculation}"
 
 
-# ✅ NOUVEAU — Serializer Favoris
 class FavoriSerializer(serializers.ModelSerializer):
     vehicle_details = VehicleNestedSerializer(source='vehicle', read_only=True)
 

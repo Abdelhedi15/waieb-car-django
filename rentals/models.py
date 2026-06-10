@@ -54,14 +54,14 @@ class Reservation(models.Model):
     notes = models.TextField(blank=True)
     acompte_paye = models.BooleanField(default=False)
 
-    # Remplacement véhicule
+    # Remplacement véhicule (accident)
     vehicule_remplace = models.ForeignKey(
         Vehicle, null=True, blank=True,
         on_delete=models.SET_NULL, related_name='reservations_remplacement'
     )
     raison_remplacement = models.CharField(max_length=255, null=True, blank=True)
 
-    # État AVANT
+    # État AVANT location
     etat_avant_km = models.IntegerField(null=True, blank=True)
     etat_avant_carburant = models.CharField(max_length=10, blank=True, default='plein')
     etat_avant_eraflures = models.TextField(blank=True)
@@ -69,7 +69,7 @@ class Reservation(models.Model):
     etat_avant_propre = models.BooleanField(default=True)
     etat_avant_notes = models.TextField(blank=True)
 
-    # État APRÈS
+    # État APRÈS retour
     etat_apres_km = models.IntegerField(null=True, blank=True)
     etat_apres_carburant = models.CharField(max_length=10, blank=True)
     etat_apres_eraflures = models.TextField(blank=True)
@@ -78,20 +78,30 @@ class Reservation(models.Model):
     etat_apres_notes = models.TextField(blank=True)
     a_accident = models.BooleanField(default=False)
     accident_description = models.TextField(blank=True)
+
+    # ✅ NOUVEAU — Inspection de Retour (RetourCheck)
+    inspection_retour_faite = models.BooleanField(default=False)
+    etat_retour = models.CharField(max_length=20, blank=True, null=True)
+    notes_retour = models.TextField(blank=True, null=True)
+    score_retour = models.IntegerField(blank=True, null=True)
+    kilometrage_retour = models.IntegerField(blank=True, null=True)
+    carburant_retour = models.IntegerField(blank=True, null=True)
+    eraflures_retour = models.TextField(blank=True, null=True)
+    bosses_retour = models.TextField(blank=True, null=True)
+
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
         return f"Réservation #{self.id} - {self.client} - {self.vehicle}"
 
 
-# ✅ NOUVEAU — Favoris persistés en base
 class Favori(models.Model):
     client = models.ForeignKey(Client, on_delete=models.CASCADE, related_name='favoris')
     vehicle = models.ForeignKey(Vehicle, on_delete=models.CASCADE, related_name='favoris')
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
-        unique_together = ('client', 'vehicle')  # pas de doublon possible
+        unique_together = ('client', 'vehicle')
 
     def __str__(self):
         return f"{self.client} ❤️ {self.vehicle}"
