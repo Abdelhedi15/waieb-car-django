@@ -79,6 +79,10 @@ class ReservationSerializer(serializers.ModelSerializer):
         return obj.client.prenom if obj.client else ''
 
     def validate(self, data):
+        # Sur un PATCH inspection, on ne revalide pas les dates/véhicule
+        if self.instance and data.get('inspection_retour_faite'):
+            return data
+
         vehicle    = data.get('vehicle')    or (self.instance.vehicle    if self.instance else None)
         date_debut = data.get('date_debut') or (self.instance.date_debut if self.instance else None)
         date_fin   = data.get('date_fin')   or (self.instance.date_fin   if self.instance else None)

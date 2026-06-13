@@ -79,15 +79,19 @@ class Reservation(models.Model):
     a_accident = models.BooleanField(default=False)
     accident_description = models.TextField(blank=True)
 
-    # ✅ NOUVEAU — Inspection de Retour (RetourCheck)
+    # Inspection de Retour (RetourCheck)
     inspection_retour_faite = models.BooleanField(default=False)
-    etat_retour = models.CharField(max_length=20, blank=True, null=True)
-    notes_retour = models.TextField(blank=True, null=True)
-    score_retour = models.IntegerField(blank=True, null=True)
-    kilometrage_retour = models.IntegerField(blank=True, null=True)
-    carburant_retour = models.IntegerField(blank=True, null=True)
-    eraflures_retour = models.TextField(blank=True, null=True)
-    bosses_retour = models.TextField(blank=True, null=True)
+    etat_retour             = models.CharField(max_length=20, blank=True, null=True)
+    notes_retour            = models.TextField(blank=True, null=True)
+    score_retour            = models.IntegerField(blank=True, null=True)
+    kilometrage_retour      = models.IntegerField(blank=True, null=True)
+    carburant_retour        = models.IntegerField(blank=True, null=True)
+    eraflures_retour        = models.TextField(blank=True, null=True)
+    bosses_retour           = models.TextField(blank=True, null=True)
+    # ── NOUVEAU : checklist JSON stockée en texte
+    checklist_retour        = models.TextField(blank=True, null=True)
+    # ── NOUVEAU : date horodatage de l'inspection
+    date_inspection         = models.DateTimeField(blank=True, null=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
 
