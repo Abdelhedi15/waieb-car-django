@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Client, Reservation, Favori
+from .models import Client, Reservation, Favori, IncidentVehicule
 from vehicles.models import Vehicle
 
 
@@ -79,7 +79,6 @@ class ReservationSerializer(serializers.ModelSerializer):
         return obj.client.prenom if obj.client else ''
 
     def validate(self, data):
-        # Sur un PATCH inspection, on ne revalide pas les dates/véhicule
         if self.instance and data.get('inspection_retour_faite'):
             return data
 
@@ -127,3 +126,45 @@ class FavoriSerializer(serializers.ModelSerializer):
     class Meta:
         model  = Favori
         fields = ['id', 'vehicle', 'vehicle_details', 'created_at']
+
+
+# ══════════════════════════════════════════════════════════════
+# NOUVEAU — IncidentVehiculeSerializer
+# ══════════════════════════════════════════════════════════════
+class IncidentVehiculeSerializer(serializers.ModelSerializer):
+    vehicle_info     = serializers.SerializerMethodField(read_only=True)
+    reservation_info = serializers.SerializerMethodField(read_only=True)
+    type_label       = serializers.CharField(source='get_type_incident_display', read_only=True)
+    gravite_label    = serializers.CharField(source='get_gravite_display', read_only=True)
+
+    class Meta:
+        model = IncidentVehicule
+        fields = [
+            'id', 'vehicle', 'vehicle_info', 'reservation', 'reservation_info',
+            'type_incident', 'type_label', 'gravite', 'gravite_label',
+            'zone', 'description', 'date_incident', 'signale_par',
+            'cout_reparation', 'repare', 'date_reparation',
+            'photos_notes', 'created_at',
+        ]
+        read_only_fields = ['id', 'created_at', 'vehicle_info', 'reservation_info',
+                            'type_label', 'gravite_label']
+
+    def get_vehicle_info(self, obj):
+        v = obj.vehicle
+        return {
+            'id': v.id,
+            'marque': v.marque,
+            'modele': v.modele,
+            'immatriculation': v.immatriculation,
+        }
+
+    def get_reservation_info(self, obj):
+        if not obj.reservation:
+            return None
+        r = obj.reservation
+        return {
+            'id': r.id,
+            'date_debut': str(r.date_debut),
+            'date_fin': str(r.date_fin),
+            'client': str(r.client),
+        }

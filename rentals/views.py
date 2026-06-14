@@ -3,12 +3,15 @@ import threading
 from django.conf import settings
 from django.utils import timezone
 from datetime import timedelta
-from rest_framework import generics
+from rest_framework import generics, viewsets, permissions
 from rest_framework.views import APIView
 from rest_framework.response import Response
-from .models import Client, Reservation
-from .serializers import ClientSerializer, ReservationSerializer
-from .models import Client, Reservation, Favori
+from .models import Client, Reservation, Favori, IncidentVehicule
+from .serializers import (
+    ClientSerializer, ReservationSerializer, FavoriSerializer,
+    IncidentVehiculeSerializer,
+)
+
 
 def _send_email_mailjet(to_email, to_name, subject, body):
     def _run():
@@ -52,10 +55,6 @@ def _award_points(reservation):
 
 
 def _sync_vehicle_status(reservation):
-    """
-    ✅ FIX PRINCIPAL: un véhicule est 'loue' SEULEMENT si une résa est EN COURS aujourd'hui.
-    Une résa future (ex: 10-17 juillet) ne doit PAS mettre le véhicule en 'loue' maintenant.
-    """
     try:
         from vehicles.models import Vehicle
         vehicle = Vehicle.objects.get(id=reservation.vehicle_id)
@@ -63,24 +62,18 @@ def _sync_vehicle_status(reservation):
         statut = reservation.statut
 
         if statut in ['confirmee', 'confirmée']:
-            # ✅ FIX: loue SEULEMENT si la résa est EN COURS aujourd'hui
             if reservation.date_debut <= today <= reservation.date_fin:
                 vehicle.statut = 'loue'
             else:
-                # Résa future OU passée → vérifier si une autre résa est en cours
                 other_active_now = Reservation.objects.filter(
                     vehicle_id=vehicle.id,
                     statut__in=['confirmee', 'confirmée'],
                     date_debut__lte=today,
                     date_fin__gte=today,
                 ).exclude(id=reservation.id).exists()
-                if other_active_now:
-                    vehicle.statut = 'loue'
-                else:
-                    vehicle.statut = 'disponible'
+                vehicle.statut = 'loue' if other_active_now else 'disponible'
 
         elif statut in ['annulee', 'annulée', 'terminee', 'terminée']:
-            # Vérifier si une autre résa est EN COURS aujourd'hui
             other_active_now = Reservation.objects.filter(
                 vehicle_id=vehicle.id,
                 statut__in=['confirmee', 'confirmée'],
@@ -96,25 +89,62 @@ def _sync_vehicle_status(reservation):
 
 
 def _get_montant_restant(reservation):
-    """✅ FIX: utilise Paiement (pas Payment)"""
     try:
         from payments.models import Paiement, Avance
-        total_paiements = sum(
-            float(p.montant) for p in Paiement.objects.filter(reservation=reservation)
-        )
-        total_avances = sum(
-            float(a.montant_total) for a in Avance.objects.filter(reservation=reservation)
-        )
+        total_paiements = sum(float(p.montant) for p in Paiement.objects.filter(reservation=reservation))
+        total_avances   = sum(float(a.montant_total) for a in Avance.objects.filter(reservation=reservation))
         acompte = float(reservation.acompte or 0)
         total_paye = total_paiements + total_avances + acompte
-        montant_total = float(reservation.montant_total or 0)
-        return max(0, montant_total - total_paye)
+        return max(0, float(reservation.montant_total or 0) - total_paye)
     except Exception as e:
         print(f'[montant_restant] error: {e}')
-        acompte = float(reservation.acompte or 0)
-        total = float(reservation.montant_total or 0)
-        return max(0, total - acompte)
+        return max(0, float(reservation.montant_total or 0) - float(reservation.acompte or 0))
 
+
+def _send_notification_email(reservation, statut):
+    try:
+        client = reservation.client
+        email = client.email
+        if not email:
+            try: email = client.user.email
+            except Exception: pass
+        if not email:
+            return
+        vehicle = reservation.vehicle
+        nom_client = f'{client.prenom} {client.nom}'
+        date_debut = reservation.date_debut
+        date_fin   = reservation.date_fin
+        duree      = (date_fin - date_debut).days
+        montant_total = reservation.montant_total
+        acompte    = reservation.acompte
+        is_confirmed = statut in ['confirmee', 'confirmée']
+        if is_confirmed:
+            subject = 'Votre reservation est confirmee - Waieb Car Rent'
+            body = (
+                f"Bonjour {nom_client},\n\nVotre reservation a ete confirmee.\n\n"
+                f"Vehicule : {vehicle.marque} {vehicle.modele} ({vehicle.immatriculation})\n"
+                f"Debut    : {date_debut}\nFin      : {date_fin}\n"
+                f"Duree    : {duree} jour(s)\nTotal    : {montant_total} DT\n"
+                f"Acompte  : {acompte} DT\n\n"
+                f"Presentez-vous a notre agence avec votre CIN et permis.\n\n"
+                f"Cordialement,\nWaieb Car Rent"
+            )
+        else:
+            subject = 'Votre reservation a ete annulee - Waieb Car Rent'
+            body = (
+                f"Bonjour {nom_client},\n\nVotre reservation a ete annulee.\n\n"
+                f"Vehicule : {vehicle.marque} {vehicle.modele}\n"
+                f"Debut    : {date_debut}\nFin      : {date_fin}\n\n"
+                f"Cordialement,\nWaieb Car Rent"
+            )
+        _send_email_mailjet(email, nom_client, subject, body)
+    except Exception as e:
+        print(f'[email] ERROR: {e}')
+
+
+# ══════════════════════════════════════════════════════════════
+# VIEWS EXISTANTES
+# ══════════════════════════════════════════════════════════════
 
 class ClientListView(generics.ListCreateAPIView):
     queryset = Client.objects.all()
@@ -184,7 +214,6 @@ class ReservationDetailView(generics.RetrieveUpdateDestroyAPIView):
             from vehicles.models import Vehicle
             vehicle = Vehicle.objects.get(id=reservation.vehicle_id)
             today = timezone.now().date()
-            # ✅ FIX: libérer seulement si pas de résa EN COURS aujourd'hui
             active_now = Reservation.objects.filter(
                 vehicle_id=vehicle.id,
                 statut__in=['en_attente', 'confirmee', 'confirmée'],
@@ -219,11 +248,6 @@ class ReservationPatchView(generics.UpdateAPIView):
 
 
 class CheckPaymentsView(APIView):
-    """
-    GET /api/reservations/check-payments/
-    - Email J-1 aux clients avec montant restant
-    - Auto-annulation + libération véhicule si non payé après date_fin
-    """
     permission_classes = []
 
     def get(self, request):
@@ -231,7 +255,6 @@ class CheckPaymentsView(APIView):
         tomorrow = today + timedelta(days=1)
         results = {'emails_j1': [], 'annulations': [], 'errors': []}
 
-        # ── Email J-1
         for r in Reservation.objects.filter(
             statut__in=['confirmée', 'confirmee', 'en_attente'],
             date_fin=tomorrow,
@@ -252,15 +275,10 @@ class CheckPaymentsView(APIView):
                             f"Merci de regler ce montant lors de la restitution.\n\n"
                             f"Cordialement,\nWaieb Car Rent"
                         )
-                        results['emails_j1'].append({
-                            'reservation': r.id,
-                            'client': f'{client.prenom} {client.nom}',
-                            'montant_restant': montant_restant,
-                        })
+                        results['emails_j1'].append({'reservation': r.id, 'montant_restant': montant_restant})
             except Exception as e:
                 results['errors'].append(f'Email J-1 #{r.id}: {str(e)}')
 
-        # ── Auto-annulation : date_fin passée + montant restant
         for r in Reservation.objects.filter(
             statut__in=['confirmée', 'confirmee', 'en_attente'],
             date_fin__lt=today,
@@ -273,7 +291,6 @@ class CheckPaymentsView(APIView):
                     r.save()
                     try:
                         vehicle = r.vehicle
-                        # ✅ FIX: libérer seulement si pas de résa EN COURS aujourd'hui
                         still_active = Reservation.objects.filter(
                             vehicle_id=vehicle.id,
                             statut__in=['en_attente', 'confirmee', 'confirmée'],
@@ -285,37 +302,24 @@ class CheckPaymentsView(APIView):
                             vehicle.save()
                     except Exception as ve:
                         results['errors'].append(f'Vehicule #{r.id}: {str(ve)}')
-                    results['annulations'].append({
-                        'reservation': r.id,
-                        'client': f'{r.client.prenom} {r.client.nom}',
-                        'montant_restant': montant_restant,
-                    })
+                    results['annulations'].append({'reservation': r.id, 'montant_restant': montant_restant})
             except Exception as e:
                 results['errors'].append(f'Annulation #{r.id}: {str(e)}')
 
-        return Response({
-            'status': 'done',
-            'date': str(today),
-            'emails_j1': len(results['emails_j1']),
-            'annulations': len(results['annulations']),
-            'details': results,
-        })
+        return Response({'status': 'done', 'date': str(today),
+                         'emails_j1': len(results['emails_j1']),
+                         'annulations': len(results['annulations']),
+                         'details': results})
 
 
 class SyncStatutsView(APIView):
-    """
-    GET /api/reservations/sync-statuts/
-    ✅ FIX: 'loue' seulement si résa EN COURS aujourd'hui (pas future)
-    """
     permission_classes = []
 
     def get(self, request):
         from vehicles.models import Vehicle
         today = timezone.now().date()
         updated = []
-
         for vehicle in Vehicle.objects.filter(statut='loue'):
-            # ✅ FIX: vérifier si résa EN COURS aujourd'hui (date_debut <= today <= date_fin)
             active_now = Reservation.objects.filter(
                 vehicle_id=vehicle.id,
                 statut__in=['confirmee', 'confirmée', 'en_attente'],
@@ -326,91 +330,30 @@ class SyncStatutsView(APIView):
                 vehicle.statut = 'disponible'
                 vehicle.save()
                 updated.append(f'{vehicle.marque} {vehicle.modele} ({vehicle.immatriculation})')
+        return Response({'status': 'done', 'vehicules_liberes': len(updated), 'details': updated})
 
-        return Response({
-            'status': 'done',
-            'vehicules_liberes': len(updated),
-            'details': updated,
-        })
-
-
-def _send_notification_email(reservation, statut):
-    try:
-        client = reservation.client
-        email = client.email
-        if not email:
-            try:
-                email = client.user.email
-            except Exception:
-                pass
-        if not email:
-            return
-        vehicle = reservation.vehicle
-        nom_client = f'{client.prenom} {client.nom}'
-        date_debut = reservation.date_debut
-        date_fin = reservation.date_fin
-        duree = (date_fin - date_debut).days
-        montant_total = reservation.montant_total
-        acompte = reservation.acompte
-        is_confirmed = statut in ['confirmee', 'confirmée']
-        if is_confirmed:
-            subject = 'Votre reservation est confirmee - Waieb Car Rent'
-            body = (
-                f"Bonjour {nom_client},\n\nVotre reservation a ete confirmee.\n\n"
-                f"Vehicule : {vehicle.marque} {vehicle.modele} ({vehicle.immatriculation})\n"
-                f"Debut    : {date_debut}\nFin      : {date_fin}\n"
-                f"Duree    : {duree} jour(s)\nTotal    : {montant_total} DT\n"
-                f"Acompte  : {acompte} DT\n\n"
-                f"Presentez-vous a notre agence avec votre CIN et permis.\n\n"
-                f"Cordialement,\nWaieb Car Rent"
-            )
-        else:
-            subject = 'Votre reservation a ete annulee - Waieb Car Rent'
-            body = (
-                f"Bonjour {nom_client},\n\nVotre reservation a ete annulee.\n\n"
-                f"Vehicule : {vehicle.marque} {vehicle.modele}\n"
-                f"Debut    : {date_debut}\nFin      : {date_fin}\n\n"
-                f"Cordialement,\nWaieb Car Rent"
-            )
-        _send_email_mailjet(email, nom_client, subject, body)
-    except Exception as e:
-        print(f'[email] ERROR: {e}')
-        
-        # Ajouter cette view à la fin de rentals/views.py
-# Et ajouter dans rentals/urls.py :
-# path('reservations/<int:pk>/payer-reste/', PayerResteView.as_view()),
-# AVANT le pattern <int:pk>
 
 class PayerResteView(APIView):
-    """
-    POST /api/reservations/{id}/payer-reste/
-    Marque la réservation comme soldée et envoie un email de confirmation de paiement.
-    Appelé depuis Flutter après que le client paie le restant (carte ou espèces).
-    """
     def post(self, request, pk):
         try:
             reservation = Reservation.objects.get(pk=pk)
             client = reservation.client
             email = client.email or (client.user.email if hasattr(client, 'user') and client.user else None)
 
-            # Marquer acompte_paye = True si le champ existe
             if hasattr(reservation, 'acompte_paye'):
                 reservation.acompte_paye = True
                 reservation.save(update_fields=['acompte_paye'])
 
-            # Calculer montant restant pour l'email
             acompte = float(reservation.acompte or 0)
-            total = float(reservation.montant_total or 0)
+            total   = float(reservation.montant_total or 0)
             restant = max(0, total - acompte)
-
-            mode = request.data.get('mode', 'carte')  # 'carte' ou 'especes'
+            mode     = request.data.get('mode', 'carte')
             rdv_date = request.data.get('rdv_date', '')
-            rdv_heure = request.data.get('rdv_heure', '')
+            rdv_heure= request.data.get('rdv_heure', '')
 
             if email:
                 vehicle = reservation.vehicle
                 nom_client = f'{client.prenom} {client.nom}'
-
                 if mode == 'carte':
                     subject = '✅ Paiement reçu — Waieb Car Rent'
                     body = (
@@ -421,8 +364,7 @@ class PayerResteView(APIView):
                         f"Période      : {reservation.date_debut} → {reservation.date_fin}\n"
                         f"Montant payé : {restant:.2f} DT\n\n"
                         f"Votre réservation est entièrement soldée. À bientôt !\n\n"
-                        f"Cordialement,\nWaieb Car Rent\n"
-                        f"waiebcarrent2026@gmail.com"
+                        f"Cordialement,\nWaieb Car Rent"
                     )
                 else:
                     subject = '📅 RDV enregistré — Paiement Waieb Car Rent'
@@ -434,44 +376,27 @@ class PayerResteView(APIView):
                         f"Période      : {reservation.date_debut} → {reservation.date_fin}\n"
                         f"Montant dû   : {restant:.2f} DT\n"
                         f"RDV          : {rdv_date} à {rdv_heure}\n\n"
-                        f"Présentez-vous à notre agence à l'heure du RDV avec votre CIN.\n"
-                        f"La réservation sera confirmée après paiement au bureau.\n\n"
-                        f"Cordialement,\nWaieb Car Rent\n"
-                        f"waiebcarrent2026@gmail.com"
+                        f"Présentez-vous à notre agence à l'heure du RDV avec votre CIN.\n\n"
+                        f"Cordialement,\nWaieb Car Rent"
                     )
-
                 _send_email_mailjet(email, nom_client, subject, body)
 
             return Response({'status': 'ok', 'email_sent': bool(email)})
-
         except Reservation.DoesNotExist:
             return Response({'error': 'Réservation introuvable'}, status=404)
         except Exception as e:
-            print(f'[payer-reste] error: {e}')
             return Response({'error': str(e)}, status=500)
-        
-        # ── Ajouter cet import en haut de rentals/views.py :
-# from .models import Client, Reservation, Favori
-# from .serializers import ClientSerializer, ReservationSerializer, FavoriSerializer
+
 
 class FavorisView(APIView):
-    """
-    GET  /api/favoris/              → liste des favoris du client connecté
-    POST /api/favoris/              → ajouter un favori  { "vehicle_id": 5 }
-    DELETE /api/favoris/{vehicle_id}/ → supprimer un favori
-    """
     def _get_client(self, request):
-        try:
-            return request.user.client_profile
-        except Exception:
-            return None
+        try: return request.user.client_profile
+        except Exception: return None
 
     def get(self, request):
         client = self._get_client(request)
         if not client:
             return Response([], status=200)
-        from .serializers import FavoriSerializer
-        from .models import Favori
         favoris = Favori.objects.filter(client=client).select_related('vehicle')
         return Response(FavoriSerializer(favoris, many=True, context={'request': request}).data)
 
@@ -484,7 +409,6 @@ class FavorisView(APIView):
             return Response({'error': 'vehicle_id requis'}, status=400)
         try:
             from vehicles.models import Vehicle
-            from .models import Favori
             vehicle = Vehicle.objects.get(pk=vehicle_id)
             favori, created = Favori.objects.get_or_create(client=client, vehicle=vehicle)
             return Response({'status': 'added' if created else 'already_exists', 'id': favori.id})
@@ -497,6 +421,28 @@ class FavorisView(APIView):
             return Response({'error': 'Non authentifié'}, status=401)
         if not vehicle_id:
             return Response({'error': 'vehicle_id requis'}, status=400)
-        from .models import Favori
         deleted, _ = Favori.objects.filter(client=client, vehicle_id=vehicle_id).delete()
         return Response({'status': 'removed' if deleted else 'not_found'})
+
+
+# ══════════════════════════════════════════════════════════════
+# NOUVEAU — IncidentVehiculeViewSet
+# ══════════════════════════════════════════════════════════════
+class IncidentVehiculeViewSet(viewsets.ModelViewSet):
+    queryset = IncidentVehicule.objects.select_related('vehicle', 'reservation').all()
+    serializer_class = IncidentVehiculeSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        vehicle_id     = self.request.query_params.get('vehicle')
+        reservation_id = self.request.query_params.get('reservation')
+        type_incident  = self.request.query_params.get('type_incident')
+        repare         = self.request.query_params.get('repare')
+
+        if vehicle_id:     qs = qs.filter(vehicle_id=vehicle_id)
+        if reservation_id: qs = qs.filter(reservation_id=reservation_id)
+        if type_incident:  qs = qs.filter(type_incident=type_incident)
+        if repare is not None:
+            qs = qs.filter(repare=(repare.lower() == 'true'))
+        return qs
