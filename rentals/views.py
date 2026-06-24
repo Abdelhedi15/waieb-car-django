@@ -6,6 +6,7 @@ from datetime import timedelta
 from rest_framework import generics, viewsets, permissions
 from rest_framework.views import APIView
 from rest_framework.response import Response
+from rest_framework.exceptions import ValidationError
 from .models import Client, Reservation, Favori, IncidentVehicule
 from .serializers import (
     ClientSerializer, ReservationSerializer, FavoriSerializer,
@@ -143,7 +144,7 @@ def _send_notification_email(reservation, statut):
 
 
 # ══════════════════════════════════════════════════════════════
-# VIEWS EXISTANTES
+# VIEWS
 # ══════════════════════════════════════════════════════════════
 
 class ClientListView(generics.ListCreateAPIView):
@@ -169,9 +170,33 @@ class ReservationListView(generics.ListCreateAPIView):
         return Reservation.objects.all().order_by('-id')
 
     def perform_create(self, serializer):
+        # ✅ FIX — Vérification doublon avant création
+        data = serializer.validated_data
+        vehicle    = data.get('vehicle')
+        date_debut = data.get('date_debut')
+        date_fin   = data.get('date_fin')
+
+        if vehicle and date_debut and date_fin:
+            doublon = Reservation.objects.filter(
+                vehicle_id=vehicle.id,
+                statut__in=['confirmée', 'confirmee', 'en_attente'],
+                date_debut__lte=date_fin,
+                date_fin__gte=date_debut,
+            ).exists()
+
+            if doublon:
+                raise ValidationError({
+                    'error': 'Ce véhicule est déjà réservé sur cette période.',
+                    'code': 'doublon_reservation',
+                })
+
         reservation = serializer.save()
         if reservation.montant_total:
-            acompte = _calculate_acompte(reservation.montant_total, reservation.date_debut, reservation.date_fin)
+            acompte = _calculate_acompte(
+                reservation.montant_total,
+                reservation.date_debut,
+                reservation.date_fin,
+            )
             reservation.acompte = acompte
             reservation.save()
         _sync_vehicle_status(reservation)
@@ -426,7 +451,7 @@ class FavorisView(APIView):
 
 
 # ══════════════════════════════════════════════════════════════
-# NOUVEAU — IncidentVehiculeViewSet
+# IncidentVehiculeViewSet
 # ══════════════════════════════════════════════════════════════
 class IncidentVehiculeViewSet(viewsets.ModelViewSet):
     queryset = IncidentVehicule.objects.select_related('vehicle', 'reservation').all()
