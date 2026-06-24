@@ -170,25 +170,41 @@ class ReservationListView(generics.ListCreateAPIView):
         return Reservation.objects.all().order_by('-id')
 
     def perform_create(self, serializer):
-        # ✅ FIX — Vérification doublon avant création
-        data = serializer.validated_data
+        data       = serializer.validated_data
         vehicle    = data.get('vehicle')
+        client     = data.get('client')
         date_debut = data.get('date_debut')
         date_fin   = data.get('date_fin')
 
-        if vehicle and date_debut and date_fin:
-            doublon = Reservation.objects.filter(
-                vehicle_id=vehicle.id,
-                statut__in=['confirmée', 'confirmee', 'en_attente'],
-                date_debut__lte=date_fin,
-                date_fin__gte=date_debut,
-            ).exists()
+        if date_debut and date_fin:
+            # ── Blocage 1 : même véhicule sur la même période ─────────────
+            if vehicle:
+                vehicle_conflict = Reservation.objects.filter(
+                    vehicle_id=vehicle.id,
+                    statut__in=['confirmée', 'confirmee', 'en_attente'],
+                    date_debut__lte=date_fin,
+                    date_fin__gte=date_debut,
+                ).exists()
+                if vehicle_conflict:
+                    raise ValidationError({
+                        'error': 'Ce véhicule est déjà réservé sur cette période. Veuillez choisir un autre véhicule ou modifier les dates.',
+                        'code': 'doublon_vehicule',
+                    })
 
-            if doublon:
-                raise ValidationError({
-                    'error': 'Ce véhicule est déjà réservé sur cette période.',
-                    'code': 'doublon_reservation',
-                })
+            # ── Blocage 2 : même client sur la même période ───────────────
+            if client:
+                client_id = client.id if hasattr(client, 'id') else client
+                client_conflict = Reservation.objects.filter(
+                    client_id=client_id,
+                    statut__in=['confirmée', 'confirmee', 'en_attente'],
+                    date_debut__lte=date_fin,
+                    date_fin__gte=date_debut,
+                ).exists()
+                if client_conflict:
+                    raise ValidationError({
+                        'error': 'Ce client a déjà une réservation active sur cette période. Un client ne peut pas avoir deux locations simultanées.',
+                        'code': 'doublon_client',
+                    })
 
         reservation = serializer.save()
         if reservation.montant_total:
